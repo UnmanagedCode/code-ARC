@@ -30,7 +30,7 @@
       },
       {
         "name": "act",
-        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit.",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -39,7 +39,9 @@
             "x": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Column, ACTION6 only." },
             "y": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Row, ACTION6 only." },
             "reasoning": { "type": "string", "maxLength": 4000, "description": "Your current hypothesis, 1-2 sentences." },
-            "frame": { "type": "string", "enum": ["diff", "full", "none"], "default": "diff" }
+            "frame": { "type": "string", "enum": ["diff", "full", "none", "image"], "default": "diff" },
+            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
+            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
           },
           "required": ["session_id", "action"],
           "additionalProperties": false
@@ -47,13 +49,15 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER. frame defaults to 'full'. reasoning is shown live to the user.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
             "reasoning": { "type": "string", "maxLength": 4000 },
-            "frame": { "type": "string", "enum": ["diff", "full", "none"], "default": "full" }
+            "frame": { "type": "string", "enum": ["diff", "full", "none", "image"], "default": "full" },
+            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
+            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
           },
           "required": ["session_id"],
           "additionalProperties": false
@@ -61,12 +65,14 @@
       },
       {
         "name": "observe",
-        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'.",
+        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
-            "frame": { "type": "string", "enum": ["full", "none"], "default": "full" }
+            "frame": { "type": "string", "enum": ["full", "none", "image"], "default": "full" },
+            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
+            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
           },
           "required": ["session_id"],
           "additionalProperties": false

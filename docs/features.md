@@ -24,6 +24,7 @@
 `list_games`, `start_session`, `act`, `reset`, `observe`, `end_session`, `list_sessions`, `script_access` — contracts in [protocol.md](protocol.md).
 
 - Frames come as text (one hex digit per cell with coordinate headers); `act` sends only the changed rows by default, which keeps a typical move to a few lines.
+- **Board images:** `frame:"image"` on `act`, `reset` or `observe` writes the frame as a PNG (palette colours, optional dashed grid with labelled coordinates every few cells) and returns its path; the agent opens it with Read. An image shows layout, shapes and symmetry for a fraction of a full text frame's tokens; text frames stay the way to read exact cells. Scripts get the same picture with `Observation.save_png`. Options and file lifecycle: [protocol.md](protocol.md) → Board image.
 - `online:true` on `start_session` plays against arcprize.org with a real scorecard (link in the result and the viewer). Rate limits and idle closes are reported as refusals, never retried silently.
 - Only the agent session that started a game can act on or end it; anyone can observe.
 - **Agent scripting:** for sweeps, searches or replaying a route, an agent writes a Python script with the bundled client (`clients/code_arc.py`, path in `start_session`'s `meta.script`). The script attaches with a note, chains actions, branches on results and reads whole frames as ints; its moves go through the same checks and log as tool moves. A lost token is replaced with `script_access`. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). Contracts: [script-api.md](script-api.md).
@@ -37,4 +38,4 @@
 
 ## The `play-arc` skill
 
-Shipped as a Claude Code plugin (`claude/`), loaded into every cc session through the manifest's `claudePlugin`. It tells an agent how to probe unknown games, keep token use low (diffs, `observe` only when lost), write reasoning the user can follow, when to script with notes, and react to each refusal code.
+Shipped as a Claude Code plugin (`claude/`), loaded into every cc session through the manifest's `claudePlugin`. It tells an agent how to probe unknown games, keep token use low (diffs, a board image when it needs the layout), write reasoning the user can follow, when to script with notes, and react to each refusal code.
