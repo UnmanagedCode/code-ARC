@@ -4,13 +4,13 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { createTail } from './bootstrap.js';
+import { createTail } from './proc.js';
 import { DETAIL_MAX, SIDECAR_LINE_MAX } from './limits.js';
 
 // The only parent env vars the child sees: no ARC_*, OPERATION_MODE,
 // ENVIRONMENTS_DIR or RECORDINGS_DIR, which would override the toolkit's
 // constructor arguments.
-const ENV_ALLOWLIST = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+export const ENV_ALLOWLIST = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'TMPDIR', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
   'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy'];
 const READY_TIMEOUT_MS = 30000;
 const STDERR_LINE_MAX = 4000;
@@ -64,6 +64,7 @@ export function createSidecar({
   cwd,
   python, // () => interpreter path or null
   testToolkitDir = null,
+  gamesDir = () => null, // the verified bundle's games dir, or null
   getApiKey, // async () => key or null
   spawn = nodeSpawn,
   log = console,
@@ -210,7 +211,7 @@ export function createSidecar({
       return { ok: false, code: 'TOOLKIT_ERROR', detail: e.message };
     }
     configuredKey = key;
-    const r = await rawCall(c, 'configure', { api_key: key }, { timeoutMs: READY_TIMEOUT_MS });
+    const r = await rawCall(c, 'configure', { api_key: key, games_dir: gamesDir() }, { timeoutMs: READY_TIMEOUT_MS });
     if (!r.ok) {
       kill(c);
       return r;

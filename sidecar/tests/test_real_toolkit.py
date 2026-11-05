@@ -67,6 +67,44 @@ class RealToolkitTest(unittest.TestCase):
             p.stderr.close()
             self.assertNotRegex(err, r"Got anonymous API key: (?!\[redacted\])")
 
+    def test_offline_arcade_over_downloaded_game_makes_no_network_calls(self):
+        """The bundle's premise on the real toolkit: a game a NORMAL arcade
+        downloaded lists, makes and steps on an OFFLINE arcade with every
+        socket call guarded (sidecar/tests/netguard.py)."""
+        self.assertTrue(os.path.exists(VENV_PY), "bootstrap the .venv first: node scripts/setup.mjs")
+        probe = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import netguard
+from arc_agi import Arcade, OperationMode
+from arcengine import GameAction
+games = sys.argv[2]
+normal = Arcade(operation_mode=OperationMode.NORMAL, environments_dir=games)
+gid = normal.get_environments()[0].game_id
+assert normal.make(gid) is not None, "download failed"
+netguard.install()
+try:
+    offline = Arcade(operation_mode=OperationMode.OFFLINE, environments_dir=games)
+    listed = [e.game_id for e in offline.get_environments()]
+    env = offline.make(gid)
+    assert env is not None, "offline make failed"
+    action = GameAction.from_id(env.observation_space.available_actions[0])
+    data = {"x": 32, "y": 32} if action.is_complex() else None
+    obs = env.step(action, data=data)
+finally:
+    netguard.uninstall()
+print(json.dumps({"game": gid, "listed": listed, "stepped": obs is not None}))
+"""
+        with tempfile.TemporaryDirectory() as cwd:
+            games = os.path.join(cwd, "games")
+            out = subprocess.run([VENV_PY, "-I", "-c", probe, os.path.join(SIDECAR, "tests"), games], cwd=cwd,
+                                 env={"PATH": os.environ.get("PATH", "")}, capture_output=True, text=True, timeout=120)
+            self.assertEqual(out.returncode, 0, out.stderr[-2000:])
+            r = json.loads(out.stdout.strip().splitlines()[-1])
+            self.assertIn(r["game"], r["listed"])
+            self.assertTrue(r["stepped"])
+            self.assertNotIn("netguard:", out.stderr)
+
     def test_palette_matches_toolkit(self):
         out = subprocess.check_output([VENV_PY, "-I", "-c", "import json; from arc_agi.rendering import COLOR_MAP; print(json.dumps(COLOR_MAP))"], text=True)
         toolkit = {int(k): v for k, v in json.loads(out).items()}

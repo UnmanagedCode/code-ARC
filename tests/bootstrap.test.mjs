@@ -6,8 +6,10 @@ import { createHash } from 'node:crypto';
 import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
-import { createBootstrap, DIVERGED_FIX, FIX } from '../src/bootstrap.js';
+import { createBootstrap, DIVERGED_FIX, FIX, PIP_VERSION } from '../src/bootstrap.js';
+import { bundleInstallArgs } from '../src/bundle.js';
 import { captureLog, freshEnv, json, startApp, until } from './_helpers.mjs';
+import { makeBundleDir, TARGET } from './_bundle.mjs';
 
 const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
 const sha = (s) => createHash('sha256').update(s).digest('hex');
@@ -235,4 +237,93 @@ test('failed and diverged states carry their fix in api/status', async (t) => {
   const { url } = await startApp(t, { env: div.env, config: { checkoutDir: div.dir, python: null }, spawn: fakeSpawn(() => ({ code: 0 })).spawn });
   const tk = await until(async () => { const b = (await json(`${url}/api/status`)).body.toolkit; return b.state === 'diverged' && b; });
   assert.equal(tk.fix, DIVERGED_FIX);
+});
+
+// -- offline bundle installs ---------------------------------------------------
+
+const BUNDLE_PIP = Buffer.from('bundled pip zipapp');
+
+// A checkout plus a bundle for its requirements; `bundle` locations for createBootstrap.
+async function bundleCheckout(t, opts = {}) {
+  const { env, dir } = await checkout(t);
+  const b = await makeBundleDir(path.join(env.tmp, 'bundle'), { requirementsText: REQS, pipBytes: BUNDLE_PIP, ...opts });
+  return { env, dir, b, bundle: { envPath: b.dir, dataDirPath: path.join(env.dataDir, 'bundle'), toolkitDir: path.join(env.dataDir, 'toolkit') } };
+}
+
+// Python probes answer `host` as the target; venv, install and smoke succeed.
+function bundleInstaller(dir, { host = TARGET, versions = { python3: '3.13.5' }, onInstall = () => {} } = {}) {
+  return fakeSpawn(async (cmd, args) => {
+    if (args[0] === '--version') return versions[cmd] ? { code: 0, out: `Python ${versions[cmd]}\n` } : { code: 127 };
+    if (args[0] === '-I' && args[1] === '-c' && args[2].includes('platform')) return { code: 0, out: `${JSON.stringify(host)}\n` };
+    if (args[0] === '-m' && args[1] === 'venv') {
+      await fs.mkdir(path.join(dir, '.venv', 'bin'), { recursive: true });
+      return { code: 0 };
+    }
+    if (args[1] === 'install') {
+      await onInstall(args);
+      return { code: 0 };
+    }
+    if (args[0] === '-I') return { code: 0 };
+    return { code: 1 };
+  });
+}
+
+test('a bundle installs with --no-index from its own pip and wheels and never fetches', async (t) => {
+  const { dir, b, bundle } = await bundleCheckout(t);
+  let reqFile = null;
+  const { spawn, calls } = bundleInstaller(dir, { onInstall: async (args) => { reqFile = await fs.readFile(args[args.length - 1], 'utf8'); } });
+  const bs = createBootstrap({ checkoutDir: dir, bundle, spawn, fetch: noFetch, pip: { url: 'https://example.invalid/pip.pyz', sha256: sha(BUNDLE_PIP) }, log: quiet });
+  await bs.run();
+  const s = bs.status();
+  assert.equal(s.state, 'ready', s.detail);
+  assert.equal(s.source, 'bundle');
+  assert.equal(s.bundle.id, b.id);
+  assert.equal(s.bundle.location, 'env');
+  assert.equal(bs.gamesDir(), path.join(b.dir, 'games'));
+  const install = calls.find((c) => c[2] === 'install');
+  const requirementsFile = path.join(dir, '.venv', 'code-arc-bundle-requirements.txt');
+  assert.deepEqual(install, [path.join(dir, '.venv', 'bin', 'python'), ...bundleInstallArgs({
+    pyz: path.join(b.dir, 'pip', `pip-${PIP_VERSION}.pyz`), wheelsDir: path.join(b.dir, 'wheels'), requirementsFile,
+  })]);
+  for (const flag of ['--isolated', '--no-index', '--require-hashes']) assert.ok(install.includes(flag), flag);
+  const wheelSha = Object.fromEntries(b.manifest.files.map((f) => [f.path, f.sha256]));
+  assert.deepEqual(reqFile.trim().split('\n'), b.manifest.wheels.map((w) => `${w.project}==${w.version} --hash=sha256:${wheelSha[w.file]}`));
+  assert.ok(!calls.some((c) => c.join(' ').includes('download')), 'no download phase');
+});
+
+test('a platform mismatch fails before any venv is made', async (t) => {
+  const { dir, bundle } = await bundleCheckout(t);
+  const { spawn, calls } = bundleInstaller(dir, { host: { ...TARGET, machine: 'aarch64' } });
+  const bs = createBootstrap({ checkoutDir: dir, bundle, spawn, fetch: noFetch, pip: { url: 'x', sha256: sha(BUNDLE_PIP) }, log: quiet });
+  await bs.run();
+  const s = bs.status();
+  assert.equal(s.state, 'failed');
+  assert.equal(s.code, 'BUNDLE_PLATFORM_MISMATCH');
+  assert.match(s.detail, /aarch64/);
+  assert.match(s.fix, /export the bundle on a machine matching this host/);
+  assert.equal(bs.gamesDir(), null);
+  assert.ok(!calls.some((c) => c[2] === 'venv'), 'no venv spawned');
+  assert.ok(!existsSync(path.join(dir, '.venv')));
+});
+
+test('a bundle whose pip differs from the pinned pip is BUNDLE_STALE', async (t) => {
+  const { dir, bundle } = await bundleCheckout(t);
+  const { spawn, calls } = bundleInstaller(dir);
+  const bs = createBootstrap({ checkoutDir: dir, bundle, spawn, fetch: noFetch, pip: { url: 'x', sha256: sha('the pinned pip') }, log: quiet });
+  await bs.run();
+  assert.equal(bs.status().state, 'failed');
+  assert.equal(bs.status().code, 'BUNDLE_STALE');
+  assert.equal(calls.length, 0, 'nothing ran');
+});
+
+test('with a bundle, python<target> is tried first', async (t) => {
+  const { dir, bundle } = await bundleCheckout(t, { target: { ...TARGET, python: '3.12' } });
+  const { spawn, calls } = bundleInstaller(dir, {
+    host: { ...TARGET, python: '3.12' }, versions: { 'python3.13': '3.13.5', 'python3.12': '3.12.9', python3: '3.13.5' },
+  });
+  const bs = createBootstrap({ checkoutDir: dir, bundle, spawn, fetch: noFetch, pip: { url: 'x', sha256: sha(BUNDLE_PIP) }, log: quiet });
+  await bs.run();
+  assert.equal(bs.status().state, 'ready', bs.status().detail);
+  assert.deepEqual(calls[0], ['python3.12', '--version']);
+  assert.deepEqual(calls.find((c) => c[2] === 'venv').slice(0, 1), ['python3.12']);
 });

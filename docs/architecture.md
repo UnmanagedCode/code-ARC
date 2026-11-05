@@ -18,6 +18,11 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `src/http.js` | Security headers, bounded JSON bodies, cross-site guard, router, `clientError` |
 | `src/static.js` | Frontend file allowlist |
 | `src/bootstrap.js` | Builds `.venv` (state machine below) |
+| `src/bundle.js` | Offline bundle policy: locations, manifest schema, path allowlist, `BUNDLE_LIMITS`, the one verifier (`verifyBundle`), install args ([bundle.md](bundle.md)) |
+| `src/tar.js` | Streaming POSIX ustar writer and fail-closed reader (files and directories only) |
+| `src/bundleImport.js` | `importBundle`: untrusted archive → staging → verify → atomic rename into `<data>/bundle` |
+| `src/bundleExport.js` | `exportBundle`: pip, wheels and games into a verified `.arcbundle` |
+| `src/proc.js` | Child runner shared by the bootstrap and export: deadlines, process-group kill, `stopAll`, captured stdout |
 | `src/sidecar.js` | Owns the Python child: spawn, protocol, deadlines, late replies, redaction, respawn |
 | `src/sessions.js` | Session service: lifecycle, ownership and script-token gating, online and step limits, runs and notes, idle sweep, SSE publishing |
 | `src/mcp.js` | Tool handlers, schema validation against the manifest, result shaping |
@@ -30,7 +35,9 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `src/store.js` | The only session writer; `src/keyStore.js` the key; `src/atomicFile.js` helpers |
 | `src/sse.js` | SSE hub with a replay ring |
 | `sidecar/arc_sidecar.py` | Protocol loop, fd isolation, logging and redaction, a thread per request |
-| `sidecar/engine.py` | Toolkit adapter: one `Arcade` per mode, the environments, failure classification, reasoning byte check |
+| `sidecar/engine.py` | Toolkit adapter: one `Arcade` per mode (plus an OFFLINE arcade over a bundle's games), the environments, failure classification, reasoning byte check |
+| `sidecar/bundle_games.py` | Export helper (never run by the backend): downloads every listed game into a bundle's `games/` |
+| `scripts/bundle.mjs` | Bundle CLI: `export`, `import` |
 | `frontend/` | Vanilla ES modules, no build: `app.js` (state, routing, SSE), `grid.js`, `sessions.js`, `steplog.js`, `runs.js` (pure script-run helpers), `settings.js`, `palette.js`, `safeHref.js`, `api.js` |
 | `clients/code_arc.py` | Stdlib-only Python client for the script HTTP API, handed to agents as `meta.script.client` |
 | `claude/` | Claude Code plugin with the `play-arc` skill |
@@ -53,9 +60,10 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 ## The venv bootstrap (`src/bootstrap.js`)
 
 - `.venv/code-arc-stamp.json` = `{requirements_sha256, python_version}`, written **last**; a matching stamp means ready.
-- States: `checking` → `installing` (phases `python`, `venv`, `download`, `install`, `smoke`) → `ready`; or `failed` (`code`: `PYTHON_MISSING`, `DOWNLOAD_FAILED`, `HASH_MISMATCH`, `VENV_FAILED`, `INSTALL_FAILED`, `SMOKE_FAILED`) or `diverged`, each with a `fix` (`FIX`, `DIVERGED_FIX`) carried in the status, the refusals and the viewer banner; or `stopped` (shutdown mid-install).
+- States: `checking` (phases `bundle`, `stamp`) → `installing` (phases `python`, `venv`, `download`, `install`, `smoke`) → `ready`; or `failed` (`code`: `PYTHON_MISSING`, `DOWNLOAD_FAILED`, `HASH_MISMATCH`, `VENV_FAILED`, `INSTALL_FAILED`, `SMOKE_FAILED`, `BUNDLE_INVALID`, `BUNDLE_HASH_MISMATCH`, `BUNDLE_STALE`, `BUNDLE_PLATFORM_MISMATCH`) or `diverged`, each with a `fix` (`FIX`, `DIVERGED_FIX`) carried in the status, the refusals and the viewer banner; or `stopped` (shutdown mid-install).
 - Steps: find a Python of at least `MIN_PYTHON` among `PYTHON_CANDIDATES` → `python -m venv --without-pip .venv` → download the pip zipapp (`PIP_PYZ_URL`, verified against `PIP_PYZ_SHA256`) → `pip.pyz install -r requirements.txt` → `import arc_agi, arcengine` → stamp.
 - **A symlinked `.venv` is never written through:** stamp mismatch → `diverged`. Fix in that worktree: `rm .venv && node scripts/setup.mjs`.
+- **Offline bundle** ([bundle.md](bundle.md)): `bundle` locations (`config.bundle`, from `bundleLocations`) are located and verified first, every boot, also under `CODE_ARC_PYTHON`; the install then uses the bundle's pip and wheels (`--no-index`, no `download` phase), after a target check against the interpreter. Status gains `source` and `bundle`; `bootstrap.gamesDir()` hands `<bundle>/games` to the sidecar's `configure`. `start_session` turns the sidecar's `web_unavailable` into `NETWORK_ERROR` (online) or a `GAME_UNKNOWN` detail (local) for an id outside the bundle (`src/sessions.js`).
 - `CODE_ARC_PYTHON` skips the bootstrap (test seam); `node scripts/setup.mjs` runs the same bootstrap in the foreground.
 - To bump pip: update `PIP_VERSION` and `PIP_PYZ_SHA256` together (download the zipapp, `sha256sum` it).
 
@@ -78,6 +86,7 @@ sessions/<sid>/meta.json     session meta (atomic writes)
 sessions/<sid>/steps.jsonl   one step per line, append-only; frames as `frame_z`
 sessions/<sid>/notes.jsonl   one script run note per line, append-only
 toolkit/                     sidecar cwd: the toolkit's environment_files/ (downloaded games), .env lookup
+bundle/                      the imported offline bundle (bundle.md); read-only to the toolkit
 ```
 
 - The latest frame per session is cached in memory and rebuilt on start from the tail of `steps.jsonl` (`TAIL_READ_BYTES` in `src/store.js`).
@@ -91,5 +100,6 @@ toolkit/                     sidecar cwd: the toolkit's environment_files/ (down
 - Scripted play: `tests/script.test.mjs` (the HTTP contract, runs, auth, limits, token secrecy), `tests/scriptClient.test.mjs` (spawns `python3 -I tests/fixtures/client_driver.py` against `startApp`). The `stepRate` seam on `createApp` (`{max, windowMs}`) lifts the per-session step rate for tests that act back to back.
 - Node tests run the **real sidecar** on the system `python3` against the **fake toolkit** in `sidecar/tests/fakes/` (`CODE_ARC_PYTHON=python3`, `CODE_ARC_TEST_TOOLKIT_DIR`). The fake mirrors the toolkit's signatures and failure shapes, records every call to `<data>/toolkit/calls.jsonl` (the key as its sha256), and ships games that hang, crash, print, rate-limit or lose their scorecard.
 - Each test gets a fresh data dir and projects root (`freshEnv` in `tests/_helpers.mjs`); clocks, timers, deadlines, the online limit, spawn and fetch are injected through `createApp`.
-- Real toolkit smoke test (network, bootstrapped `.venv`): `RUN_REAL_ARC=1 python3 -m unittest sidecar.tests.test_real_toolkit`. It also checks `frontend/palette.js` against `arc_agi.rendering.COLOR_MAP`.
-- Visual check: `node harness/playwright/screenshot.mjs` (needs `CC_PROJECTS_ROOT` and the code-playwright plugin) boots a sandboxed server on the fake toolkit, drives the viewer and writes PNGs to `harness/playwright/out/`. Its script scenario boots `harness/playwright/server.mjs`, which is `server.js` with a raised step rate for a 300-step burst.
+- Offline bundle: `tests/_bundle.mjs` builds bundle dirs with real hashes, archives (also malformed ones) and a refusing fetch spy. The fake toolkit logs every request it would send to `<data>/toolkit/net.jsonl` (`{path, mode, ok}`) and fails them all while `<data>/toolkit/fake-net-down` exists; its OFFLINE mode scans a games dir and records `load_source`. `tests/bundle-boot.test.mjs` boots whole apps on that switch.
+- Real toolkit smoke test (network, bootstrapped `.venv`): `RUN_REAL_ARC=1 python3 -m unittest sidecar.tests.test_real_toolkit`. It also checks `frontend/palette.js` against `arc_agi.rendering.COLOR_MAP`, and that an OFFLINE arcade plays a downloaded game with every socket call guarded (`sidecar/tests/netguard.py`, test-only).
+- Visual check: `node harness/playwright/screenshot.mjs` (needs `CC_PROJECTS_ROOT` and the code-playwright plugin) boots a sandboxed server on the fake toolkit, drives the viewer and writes PNGs to `harness/playwright/out/`. Its script scenario boots `harness/playwright/server.mjs`, which is `server.js` with a raised step rate for a 300-step burst. `node harness/playwright/bundle.mjs` boots on a fixture bundle (`CODE_ARC_BUNDLE`) and on a tampered one: `bundle-ready.png`, `bundle-rejected.png`.

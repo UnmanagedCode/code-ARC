@@ -58,6 +58,8 @@ export function createSessions({
   let pendingStarts = 0;
   let keyChanging = false;
   let gamesCache = null;
+  // With an offline bundle: {code, detail} when the last list lacked the web's games.
+  let webUnavailable = null;
 
   const iso = (ms = clock.now()) => new Date(ms).toISOString();
   const rt = (id) => {
@@ -215,13 +217,14 @@ export function createSessions({
   }
 
   async function knownGames(refresh) {
-    if (gamesCache && !refresh) return { ok: true, games: gamesCache };
+    if (gamesCache && !refresh) return { ok: true, games: gamesCache, webUnavailable };
     const tk = toolkitGate();
     if (tk) return tk;
     const res = await sidecar.call('list_games', {}, { timeoutMs: deadlines.list_games });
     if (!res.ok) return sidecarRefusal(res);
     gamesCache = res.result.games;
-    return { ok: true, games: gamesCache };
+    webUnavailable = res.result.web_unavailable || null;
+    return { ok: true, games: gamesCache, webUnavailable };
   }
 
   const tagOf = (caller) => (caller?.script ? { source: 'script', run: caller.script.run } : TOOL);
@@ -292,7 +295,12 @@ export function createSessions({
         if (!gameListed(games.games, gameId)) {
           games = await knownGames(true);
           if (!games.ok) return games;
-          if (!gameListed(games.games, gameId)) return refuse('GAME_UNKNOWN', REASONS.GAME_UNKNOWN);
+          if (!gameListed(games.games, gameId)) {
+            const gap = games.webUnavailable;
+            const detail = gap ? `${gameId} is not in the offline bundle and the web game list could not be fetched (${gap.code}): ${gap.detail}`.slice(0, DETAIL_MAX) : undefined;
+            if (gap && online) return refuse('NETWORK_ERROR', REASONS.NETWORK_ERROR, { detail });
+            return refuse('GAME_UNKNOWN', REASONS.GAME_UNKNOWN, gap ? { detail } : {});
+          }
         }
         const rg = online ? rateGate(null, 2) : null;
         if (rg) return rg;

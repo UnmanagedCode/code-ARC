@@ -8,7 +8,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded}]}}`; a failed game-list fetch is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
+| `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded, source}]}}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; a failed game-list fetch is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list; with a bundle, a failed or slow web list degrades to the bundle's games instead of a refusal |
 | `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`) | observation, first frame full, plus `meta.script` |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default) | observation |
@@ -63,16 +63,16 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `SESSION_STALLED` | an earlier call timed out and hasn't answered | |
 | `NOT_OWNER` | owner and caller `sessionId` both known and different (collision guard, not auth) | |
 | `TOO_MANY_SESSIONS` | `MAX_LIVE_SESSIONS` live | `live` (ids) |
-| `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it | |
+| `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it (with a bundle and no network, games outside the bundle are not listed: a local start of one gets a `detail` saying the web game list could not be fetched) | `detail` (bundle case only) |
 | `ACTION_UNAVAILABLE` | action not in `available_actions` | `available_actions` |
 | `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER` | `state` |
 | `TOOLKIT_NOT_READY` | venv still being checked/installed (or stopped); or, for `start_session`, an API key change in progress (`state:"reconfiguring"`) | `state`, `phase` |
-| `TOOLKIT_UNAVAILABLE` | venv install failed | `detail` (≤ `DETAIL_MAX`), `fix` |
+| `TOOLKIT_UNAVAILABLE` | venv install failed, or the offline bundle was rejected ([bundle.md](bundle.md)) | `detail` (≤ `DETAIL_MAX`), `fix` |
 | `DEPS_DIVERGED` | worktree's symlinked `.venv` doesn't match its `requirements.txt` | `detail`, `fix` |
 | `TOOLKIT_TIMEOUT` | no answer within the op's `DEADLINES` entry; the session becomes stalled | `detail` |
 | `TOOLKIT_ERROR` | any other toolkit failure; arcprize.org refusing the API key (401/403) is this code with a detail that says so | `detail` |
 | `SIDECAR_EXITED` | the sidecar died; live sessions end with `sidecar_exit` | `detail` (redacted stderr tail) |
-| `NETWORK_ERROR` | timeout / connection failure reaching arcprize.org | `detail` |
+| `NETWORK_ERROR` | timeout / connection failure reaching arcprize.org; also `start_session` `online:true` for a game outside the offline bundle while the web game list can't be fetched | `detail` |
 | `RATE_LIMITED` | local guard for `ONLINE_RPM_LIMIT` (not sent), or a 429 from arcprize.org | `retry_after_ms` (local guard) |
 | `STEP_RATE_LIMITED` | the session took `STEP_RATE_MAX` steps in the last `STEP_RATE_WINDOW_MS` (`act`/`reset` from tools and scripts, script `attach`/`note`); refused, never delayed, not sent | `retry_after_ms` |
 | `SESSION_STEP_LIMIT` | `act`/`reset` on a session whose step count reached `SESSION_STEPS_MAX`; `end_session` and start a new one | |
@@ -91,7 +91,7 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | Route | Behaviour |
 |---|---|
 | `GET api/health` | `{ok:true}`; independent of the toolkit (`healthPath`) |
-| `GET api/status` | `{toolkit:{state, phase, detail, fix, python, code}, sidecar:{running, versions}}`; toolkit `state` ∈ `checking`, `installing`, `ready`, `failed`, `diverged`, `stopped`; `fix` is set for `failed` and `diverged` |
+| `GET api/status` | `{toolkit:{state, phase, detail, fix, python, code, source, bundle}, sidecar:{running, versions}}`; toolkit `state` ∈ `checking`, `installing`, `ready`, `failed`, `diverged`, `stopped`; `fix` is set for `failed` and `diverged`; `source` ∈ `web`, `bundle`, `null`; `bundle` is `null` or `{location, path, id, created_at, target, toolkit, games, shadowed}` (`id` `null` for a rejected bundle; [bundle.md](bundle.md)) |
 | `GET api/sessions?before&limit` | `{sessions:[meta…], total, next}`: newest first, at most `SESSIONS_PAGE_MAX`, starting after the session id `before` (400 if malformed); `next` is the `before` for the following page, `null` at the end; `total` counts every stored session |
 | `GET api/sessions/:id` | meta; 404 `SESSION_UNKNOWN` |
 | `GET api/sessions/:id/steps?from&limit` | `{steps:[…]}` with `n ≥ from`, at most `STEPS_PAGE_MAX` |
@@ -145,8 +145,8 @@ JSON lines between `src/sidecar.js` and `sidecar/arc_sidecar.py`: requests on th
 
 | op | args | result |
 |---|---|---|
-| `configure` | `{api_key}` | `{}`; must come first (else `NOT_CONFIGURED`) |
-| `list_games` | — | `{games}` |
+| `configure` | `{api_key, games_dir}` | `{}`; must come first (else `NOT_CONFIGURED`); `games_dir` is the verified bundle's games dir or `null` (else `INVALID_ARGUMENT` unless an existing absolute dir) |
+| `list_games` | — | `{games, web_unavailable?}`; `web_unavailable: {code, detail}` only with a `games_dir` whose web list failed (`code` = its refusal) or is still loading (`WEB_LIST_LOADING`) |
 | `open` | `{session_id, game_id, online}` | `{scorecard_id, game_id, title, obs}` |
 | `step` | `{session_id, action, x?, y?, reasoning?}` | `{obs}` |
 | `reset` | `{session_id}` | `{obs}` |
