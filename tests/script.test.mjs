@@ -291,6 +291,18 @@ test('script_access needs a known caller equal to a known owner; other tools kee
     assert.match(r.reason, /unidentified caller/);
   }
   assert.ok((await play(anon.script.base_url, 'attach', { note: 'n' }, { token: anon.script.token })).body.ok, 'its start_session token still works');
+
+  // An empty sessionId identifies no one: neither as the owner at start nor
+  // as the caller at rotation.
+  const EMPTY = { sessionId: '', project: 'proj' };
+  const empty = await scripted(mcp, {}, EMPTY);
+  for (const caller of [EMPTY, NULL, A]) {
+    const r = (await mcp('script_access', { session_id: empty.sid }, caller)).result;
+    assert.equal(r.code, 'NOT_OWNER', JSON.stringify(caller));
+    assert.match(r.reason, /unidentified caller/);
+  }
+  assert.equal((await mcp('script_access', { session_id: sid }, EMPTY)).result.code, 'NOT_OWNER', 'an empty caller cannot rotate a known owner\'s token');
+  assert.ok((await play(empty.script.base_url, 'attach', { note: 'n' }, { token: empty.script.token })).body.ok, 'the empty-owner session keeps its token');
   assert.ok((await mcp('act', { session_id: anon.sid, action: 'ACTION1' }, B)).meta, 'an unowned session stays open to other tools');
 });
 

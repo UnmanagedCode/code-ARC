@@ -427,9 +427,10 @@ export function createSessions({
       const meta = store.get(id);
       if (!meta) return refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids');
       if (meta.status !== 'live') return refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason });
-      const owner = meta.owner?.sessionId ?? null;
-      if (owner === null) return refuse('NOT_OWNER', 'this session was started by an unidentified caller, so no caller can prove it owns it and its script token cannot be rotated; keep using the token from start_session, or start a new session');
-      if (typeof caller?.sessionId !== 'string' || caller.sessionId !== owner) return refuse('NOT_OWNER', 'only the agent session that started this game can rotate its script token');
+      const owner = meta.owner?.sessionId;
+      // An empty id identifies no one, as in admit().
+      if (typeof owner !== 'string' || owner === '') return refuse('NOT_OWNER', 'this session was started by an unidentified caller, so no caller can prove it owns it and its script token cannot be rotated; keep using the token from start_session, or start a new session');
+      if (typeof caller?.sessionId !== 'string' || caller.sessionId === '' || caller.sessionId !== owner) return refuse('NOT_OWNER', 'only the agent session that started this game can rotate its script token');
       return { ok: true, session_id: id, script: scriptBlock(id, scriptBase(), access.mint(id)) };
     },
 

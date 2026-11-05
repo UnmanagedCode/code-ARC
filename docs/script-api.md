@@ -10,7 +10,7 @@ Same session service as the MCP tools: the same gating, refusal codes, step log 
 - `client` = the absolute path of `clients/code_arc.py` in the plugin checkout.
 - `token` = 32 random bytes, base64url. Kept in backend memory only (as its sha256) while its session is live; dropped when the session ends, by any path. A script call to an ended session (including every session after a backend restart) answers `SESSION_ENDED` + `end_reason` before any token check: status and end reason are public through `GET api/sessions/:id` anyway.
 - The token appears only in the `start_session` and `script_access` tool results (themselves `api/mcp` responses): never in the store, steps, notes, SSE, the viewer's `api/sessions*` routes, other tool results, or logs.
-- `script_access` rotates it only for a caller whose `sessionId` is a string equal to the session owner's; a session started by an unidentified caller (owner `null`) can't be rotated (`NOT_OWNER`). See [protocol.md](protocol.md) → MCP tools.
+- `script_access` rotates it only for a caller whose `sessionId` is a non-empty string equal to the session owner's; a session started by an unidentified caller (owner `null` or `""`) can't be rotated (`NOT_OWNER`). See [protocol.md](protocol.md) → MCP tools.
 
 **Every request:** `POST <base_url><op>` with
 

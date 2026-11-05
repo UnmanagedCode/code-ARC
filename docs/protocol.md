@@ -15,7 +15,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | `observe` | `session_id`, `frame` (`full` default, `none`) | observation from the stored last step; no toolkit call |
 | `end_session` | `session_id` | `{result:{ok, session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?}}` |
 | `list_sessions` | `scope` (`mine` default, `all`) | `{result:{ok, scope, sessions:[…]}}`, newest first, at most `LIST_SESSIONS_MAX` |
-| `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a string equal to the owner's, so a null caller is refused, and a session whose owner is null can't be rotated by anyone |
+| `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a non-empty string equal to the owner's, so a null or empty caller is refused, and a session whose owner is null or empty can't be rotated by anyone |
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
 - `mine` = sessions whose owner `sessionId` equals the caller's (both `null` counts as equal).
@@ -111,10 +111,10 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 ### Step
 
-`{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]}`
+`{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
 
 - `source` is missing on steps recorded before scripting existed: read it as `tool`. `run` is set on script steps only.
-- On disk a step line carries `frame_z` (base64 raw deflate of the rows joined by `\n`) instead of `frame`; every API and SSE step has `frame` rows. Lines with a plain `frame` still read.
+- On disk a step line carries `frame_z` (base64 raw deflate of the rows joined by `\n`) instead of `frame`; every API and SSE step has `frame` rows. Lines with a plain `frame` still read. A corrupt or tampered stored frame reads as `frame: null` ([architecture.md](architecture.md) → On-disk state).
 
 ### Note
 
