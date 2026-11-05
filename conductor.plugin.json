@@ -1,0 +1,100 @@
+{
+  "id": "code-arc",
+  "name": "Code ARC",
+  "version": "0.1.0",
+  "pluginApi": 1,
+  "backend": { "start": "node server.js", "healthPath": "/api/health" },
+  "frontend": { "path": "/", "navLabel": "Code ARC" },
+  "claudePlugin": "claude",
+  "mcp": {
+    "endpoint": "/api/mcp",
+    "timeoutMs": 60000,
+    "tools": [
+      {
+        "name": "list_games",
+        "description": "List the ARC-AGI-3 games available to play (game_id, title, tags).",
+        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+      },
+      {
+        "name": "start_session",
+        "description": "Start playing a game. Returns a session_id and the first full frame. A frame is a 64x64 grid, one hex digit per cell (the palette index 0-f), rows labelled by y, columns by x (origin top-left). Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "game_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "A game_id from list_games (the base id before '-' also works)." },
+            "online": { "type": "boolean", "default": false, "description": "Play against arcprize.org with a real scorecard instead of locally." }
+          },
+          "required": ["game_id"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "act",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
+            "action": { "type": "string", "enum": ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6", "ACTION7"] },
+            "x": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Column, ACTION6 only." },
+            "y": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Row, ACTION6 only." },
+            "reasoning": { "type": "string", "maxLength": 4000, "description": "Your current hypothesis, 1-2 sentences." },
+            "frame": { "type": "string", "enum": ["diff", "full", "none"], "default": "diff" }
+          },
+          "required": ["session_id", "action"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "reset",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER. frame defaults to 'full'. reasoning is shown live to the user.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
+            "reasoning": { "type": "string", "maxLength": 4000 },
+            "frame": { "type": "string", "enum": ["diff", "full", "none"], "default": "full" }
+          },
+          "required": ["session_id"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "observe",
+        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
+            "frame": { "type": "string", "enum": ["full", "none"], "default": "full" }
+          },
+          "required": ["session_id"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "end_session",
+        "description": "End a session and close its scorecard. Returns the final state and score summary. Always call this when done.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" }
+          },
+          "required": ["session_id"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "list_sessions",
+        "description": "List game sessions (newest first), e.g. to recover a session_id. scope 'mine' (default) is the ones you started.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": { "type": "string", "enum": ["mine", "all"], "default": "mine" }
+          },
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+}

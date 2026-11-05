@@ -1,0 +1,188 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { createHash } from 'node:crypto';
+import { existsSync, promises as fs } from 'node:fs';
+import path from 'node:path';
+import { createBootstrap } from '../src/bootstrap.js';
+import { captureLog, freshEnv, json, startApp, until } from './_helpers.mjs';
+
+const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
+const sha = (s) => createHash('sha256').update(s).digest('hex');
+// Above any real pid_max, so a group kill can never reach a real process.
+const FAKE_PID = 4194304 + 4242;
+
+// A spawn stand-in: `handler(cmd, args)` returns {code, out}, or 'hang'.
+function fakeSpawn(handler) {
+  const calls = [];
+  const spawn = (cmd, args) => {
+    calls.push([cmd, ...args]);
+    const child = new EventEmitter();
+    child.pid = FAKE_PID;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => setImmediate(() => child.emit('close', null));
+    Promise.resolve(handler(cmd, args)).then((r) => {
+      if (r === 'hang') return;
+      if (r.out) child.stdout.write(r.out);
+      child.stdout.end();
+      child.stderr.end();
+      setImmediate(() => child.emit('close', r.code));
+    });
+    return child;
+  };
+  return { spawn, calls };
+}
+
+async function checkout(t) {
+  const env = await freshEnv(t);
+  const dir = path.join(env.tmp, 'checkout');
+  await fs.mkdir(dir);
+  await fs.writeFile(path.join(dir, 'requirements.txt'), REQS);
+  return { env, dir };
+}
+
+const stamp = (reqs = REQS) => JSON.stringify({ requirements_sha256: sha(reqs), python_version: '3.13.5' });
+const noFetch = () => { throw new Error('fetch must not be called'); };
+const quiet = captureLog();
+
+test('a matching stamp is ready without spawning anything', async (t) => {
+  const { dir } = await checkout(t);
+  await fs.mkdir(path.join(dir, '.venv', 'bin'), { recursive: true });
+  await fs.writeFile(path.join(dir, '.venv', 'code-arc-stamp.json'), stamp());
+  const { spawn, calls } = fakeSpawn(() => ({ code: 0 }));
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: noFetch, log: quiet });
+  await b.run();
+  assert.equal(b.status().state, 'ready');
+  assert.equal(b.python(), path.join(dir, '.venv', 'bin', 'python'));
+  assert.equal(calls.length, 0);
+});
+
+test('a shared (symlinked) venv with a matching stamp is used as is', async (t) => {
+  const { env, dir } = await checkout(t);
+  const shared = path.join(env.tmp, 'shared-venv');
+  await fs.mkdir(shared);
+  await fs.writeFile(path.join(shared, 'code-arc-stamp.json'), stamp());
+  await fs.symlink(shared, path.join(dir, '.venv'));
+  const b = createBootstrap({ checkoutDir: dir, spawn: fakeSpawn(() => ({ code: 0 })).spawn, fetch: noFetch, log: quiet });
+  await b.run();
+  assert.equal(b.status().state, 'ready');
+});
+
+test('a symlinked venv whose stamp differs is diverged and never written through', async (t) => {
+  const { env, dir } = await checkout(t);
+  const shared = path.join(env.tmp, 'shared-venv');
+  await fs.mkdir(shared);
+  const old = stamp('arc-agi==0.0.1\n');
+  await fs.writeFile(path.join(shared, 'code-arc-stamp.json'), old);
+  await fs.writeFile(path.join(shared, 'marker'), 'keep');
+  await fs.symlink(shared, path.join(dir, '.venv'));
+  const { spawn, calls } = fakeSpawn(() => ({ code: 0 }));
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: noFetch, log: quiet });
+  await b.run();
+  const s = b.status();
+  assert.equal(s.state, 'diverged');
+  assert.match(s.detail, /rm \.venv/);
+  assert.equal(b.python(), null);
+  assert.equal(calls.length, 0);
+  assert.deepEqual((await fs.readdir(shared)).sort(), ['code-arc-stamp.json', 'marker']);
+  assert.equal(await fs.readFile(path.join(shared, 'code-arc-stamp.json'), 'utf8'), old);
+});
+
+test('no Python >= 3.12 fails with PYTHON_MISSING', async (t) => {
+  const { dir } = await checkout(t);
+  const { spawn } = fakeSpawn((cmd) => (cmd === 'python3' ? { code: 0, out: 'Python 3.10.4\n' } : { code: 127 }));
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: noFetch, log: quiet });
+  await b.run();
+  assert.equal(b.status().state, 'failed');
+  assert.equal(b.status().code, 'PYTHON_MISSING');
+});
+
+function installer(dir, { install = { code: 0 }, onSmoke = () => {} } = {}) {
+  return fakeSpawn(async (cmd, args) => {
+    if (args[0] === '--version') return { code: 0, out: 'Python 3.13.5\n' };
+    if (args[0] === '-m' && args[1] === 'venv') {
+      await fs.mkdir(path.join(dir, '.venv', 'bin'), { recursive: true });
+      return { code: 0 };
+    }
+    if (args[1] === 'install') return install;
+    if (args[0] === '-I') {
+      onSmoke();
+      return { code: 0 };
+    }
+    return { code: 1 };
+  });
+}
+
+const bodyFetch = (bytes) => async () => ({ ok: true, status: 200, body: [bytes] });
+
+test('a pip.pyz hash mismatch fails before installing anything', async (t) => {
+  const { dir } = await checkout(t);
+  const { spawn, calls } = installer(dir);
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: bodyFetch(Buffer.from('tampered')), pip: { url: 'https://example.invalid/pip.pyz', sha256: sha('genuine') }, log: quiet });
+  await b.run();
+  assert.equal(b.status().state, 'failed');
+  assert.equal(b.status().code, 'HASH_MISMATCH');
+  assert.ok(!calls.some((c) => c.includes('install')));
+  assert.ok(!existsSync(path.join(dir, '.venv', 'code-arc-stamp.json')));
+});
+
+test('a full install ends with the stamp, written last', async (t) => {
+  const { dir } = await checkout(t);
+  let stampAtSmoke = null;
+  const { spawn, calls } = installer(dir, { onSmoke: () => { stampAtSmoke = existsSync(path.join(dir, '.venv', 'code-arc-stamp.json')); } });
+  const pyz = Buffer.from('pip zipapp bytes');
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: bodyFetch(pyz), pip: { url: 'https://example.invalid/pip.pyz', sha256: sha(pyz) }, log: quiet });
+  await b.run();
+  assert.equal(b.status().state, 'ready');
+  assert.equal(stampAtSmoke, false);
+  const written = JSON.parse(await fs.readFile(path.join(dir, '.venv', 'code-arc-stamp.json'), 'utf8'));
+  assert.equal(written.requirements_sha256, sha(REQS));
+  const kinds = calls.map((c) => (c[1] === '--version' ? 'probe' : c[2] === 'venv' ? 'venv' : c[2] === 'install' ? 'install' : c[1] === '-I' ? 'smoke' : '?'));
+  assert.deepEqual(kinds, ['probe', 'venv', 'install', 'smoke']);
+  assert.deepEqual(await fs.readFile(path.join(dir, '.venv', 'pip.pyz')), pyz);
+});
+
+test('a failed install surfaces the output tail and writes no stamp', async (t) => {
+  const { dir } = await checkout(t);
+  const { spawn } = installer(dir, { install: { code: 1, out: 'ERROR: No matching distribution found for arc-agi==0.9.9\n' } });
+  const pyz = Buffer.from('x');
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: bodyFetch(pyz), pip: { url: 'https://example.invalid/pip.pyz', sha256: sha(pyz) }, log: quiet });
+  await b.run();
+  assert.equal(b.status().code, 'INSTALL_FAILED');
+  assert.match(b.status().detail, /No matching distribution/);
+  assert.ok(!existsSync(path.join(dir, '.venv', 'code-arc-stamp.json')));
+});
+
+test('while installing, health answers and toolkit tools refuse TOOLKIT_NOT_READY', async (t) => {
+  const { env, dir } = await checkout(t);
+  const { spawn } = fakeSpawn(() => 'hang');
+  const { url, mcp } = await startApp(t, { env, config: { checkoutDir: dir, python: null }, spawn });
+  assert.equal((await fetch(`${url}/api/health`)).status, 200);
+  await until(async () => (await json(`${url}/api/status`)).body.toolkit.state === 'installing');
+  assert.equal((await fetch(`${url}/api/health`)).status, 200);
+  const r = (await mcp('list_games')).result;
+  assert.equal(r.code, 'TOOLKIT_NOT_READY');
+  assert.equal(r.state, 'installing');
+  assert.equal((await mcp('start_session', { game_id: 'fake-maze' })).result.code, 'TOOLKIT_NOT_READY');
+  assert.equal((await json(`${url}/api/status`)).body.toolkit.state, 'installing');
+});
+
+test('failed and diverged installs refuse with detail and a fix', async (t) => {
+  const failed = await checkout(t);
+  const a = await startApp(t, { env: failed.env, config: { checkoutDir: failed.dir, python: null }, spawn: fakeSpawn(() => ({ code: 127 })).spawn });
+  const fr = await (async () => { for (;;) { const r = (await a.mcp('list_games')).result; if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
+  assert.equal(fr.code, 'TOOLKIT_UNAVAILABLE');
+  assert.match(fr.detail, /no Python/);
+  assert.ok(fr.fix);
+
+  const div = await checkout(t);
+  const shared = path.join(div.env.tmp, 'shared');
+  await fs.mkdir(shared);
+  await fs.symlink(shared, path.join(div.dir, '.venv'));
+  const b = await startApp(t, { env: div.env, config: { checkoutDir: div.dir, python: null }, spawn: fakeSpawn(() => ({ code: 0 })).spawn });
+  const dr = await (async () => { for (;;) { const r = (await b.mcp('list_games')).result; if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
+  assert.equal(dr.code, 'DEPS_DIVERGED');
+  assert.match(dr.fix, /rm \.venv/);
+});

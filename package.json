@@ -1,0 +1,13 @@
+{
+  "name": "code-arc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Code ARC: play ARC-AGI-3 games from code-conductor agents, with a live viewer",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node server.js",
+    "setup": "node scripts/setup.mjs",
+    "test": "node tests/run.mjs && python3 -I -m unittest discover -s sidecar/tests -t ."
+  }
+}
