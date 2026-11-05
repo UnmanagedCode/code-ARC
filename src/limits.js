@@ -28,6 +28,19 @@ export const SSE_MAX_BUFFERED_BYTES = 256 * 1024;
 // A diff touching more rows than this is sent as a full frame instead.
 export const DIFF_MAX_ROWS = 24;
 
+// Scripted play (src/scriptAccess.js, src/scriptRoutes.js).
+// Longest run note, in UTF-16 code units; notes per session.
+export const NOTE_MAX_CHARS = 2000;
+export const NOTES_MAX = 200;
+// Per-session step rate: act and reset from tools and scripts, plus script
+// attach and note. Refused (STEP_RATE_LIMITED), never delayed.
+export const STEP_RATE_MAX = 20;
+export const STEP_RATE_WINDOW_MS = 1000;
+// Steps per session; past it act and reset refuse SESSION_STEP_LIMIT.
+export const SESSION_STEPS_MAX = 20000;
+// Longest Authorization header a script route reads.
+export const SCRIPT_AUTH_HEADER_MAX = 256;
+
 // Per-op deadlines for sidecar calls, in ms. `open` covers a first-time game
 // download plus a scorecard; all stay under the manifest's mcp.timeoutMs.
 export const DEADLINES = Object.freeze({

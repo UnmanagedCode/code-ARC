@@ -1,9 +1,17 @@
-// The session service: lifecycle, ownership, gating, ONLINE limits, the idle
-// sweep and live events. Shared by the MCP handlers and the HTTP read routes.
+// The session service: lifecycle, ownership, gating, ONLINE and step limits,
+// script access, the idle sweep and live events. Shared by the MCP handlers,
+// the script routes and the HTTP read routes.
 // Every public method resolves; a refusal is {ok:false, code, reason, ...}.
+// A caller is either a tool caller {sessionId, project} (ownership applies) or
+// a script caller {script:{token, run}} (the token replaces ownership).
 import { randomBytes } from 'node:crypto';
-import { ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, LIST_SESSIONS_MAX, MAX_LIVE_SESSIONS, REASONING_MAX_CHARS } from './limits.js';
+import path from 'node:path';
+import {
+  ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, LIST_SESSIONS_MAX, MAX_LIVE_SESSIONS, NOTE_MAX_CHARS, NOTES_MAX,
+  REASONING_MAX_CHARS, SESSION_STEPS_MAX, STEP_RATE_MAX, STEP_RATE_WINDOW_MS,
+} from './limits.js';
 import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT, scorecardUrl } from './online.js';
+import { createScriptAccess } from './scriptAccess.js';
 
 const SWEEP_MS = 60 * 1000;
 const FINISHED = new Set(['WIN', 'GAME_OVER']);
@@ -25,11 +33,24 @@ const REASONS = {
 export const refuse = (code, reason, extra = {}) => ({ ok: false, code, reason, ...extra });
 export const actionName = (n) => (n === 0 ? 'RESET' : `ACTION${n}`);
 const newId = () => `s-${randomBytes(6).toString('hex')}`;
+const TOOL = Object.freeze({ source: 'tool' });
+const RUN_REFUSALS = {
+  NOTE_REQUIRED: 'no script run is open: attach (or note) with a note saying what the script tries and why',
+  RUN_SUPERSEDED: 'a newer attach or note opened another run; this run is over — attach again to continue',
+};
 const lastSummary = (o) => ({ state: o.state, levels_completed: o.levels_completed, win_levels: o.win_levels, available_actions: o.available_actions, frame_count: o.frame_count, full_reset: o.full_reset });
 
-export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: Date.now }, timers = { setInterval, clearInterval }, log = console, idGen = newId, deadlines = DEADLINES, onlineRpmLimit = ONLINE_RPM_LIMIT }) {
-  const runtime = new Map(); // id -> {inflight, stalled}
+// `scriptBase()` is the script API root URL (…/api/play/); `checkoutDir`
+// locates the Python client handed to agents.
+export function createSessions({
+  store, sidecar, bootstrap, hub, scriptBase, checkoutDir,
+  clock = { now: Date.now }, timers = { setInterval, clearInterval }, log = console, idGen = newId, deadlines = DEADLINES,
+  onlineRpmLimit = ONLINE_RPM_LIMIT, stepRate = { max: STEP_RATE_MAX, windowMs: STEP_RATE_WINDOW_MS },
+}) {
+  const runtime = new Map(); // id -> {inflight, stalled, steps}
   const limiter = createRateLimiter({ clock, limit: onlineRpmLimit });
+  const access = createScriptAccess();
+  const clientPath = path.join(checkoutDir, 'clients', 'code_arc.py');
   // Starts in flight count toward the live cap from their check until the
   // store holds the session; a key change runs only with none live or pending
   // and blocks starts while it runs. Each check and its reservation happen in
@@ -40,7 +61,7 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
 
   const iso = (ms = clock.now()) => new Date(ms).toISOString();
   const rt = (id) => {
-    if (!runtime.has(id)) runtime.set(id, { inflight: false, stalled: false });
+    if (!runtime.has(id)) runtime.set(id, { inflight: false, stalled: false, steps: createRateLimiter({ clock, limit: stepRate.max, windowMs: stepRate.windowMs }) });
     return runtime.get(id);
   };
   const live = () => store.list().filter((m) => m.status === 'live');
@@ -74,21 +95,43 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
     return t.ok ? null : refuse('RATE_LIMITED', `the local guard for arcprize.org's ${onlineRpmLimit}-requests-per-minute limit refused this call; it was not sent`, { retry_after_ms: t.retryAfterMs });
   }
 
+  // The per-session step rate (tools and scripts alike).
+  function stepRateGate(id) {
+    const t = rt(id).steps.take(1);
+    return t.ok ? null : refuse('STEP_RATE_LIMITED', `at most ${stepRate.max} steps per ${stepRate.windowMs} ms on one session; wait retry_after_ms once, do not loop`, { retry_after_ms: t.retryAfterMs });
+  }
+
+  // Step-taking calls past the per-session cap, then the step rate.
+  function stepGates(id, meta) {
+    if (meta.step_count >= SESSION_STEPS_MAX) return refuse('SESSION_STEP_LIMIT', `this session has reached ${SESSION_STEPS_MAX} steps; end_session and start a new one`);
+    return stepRateGate(id);
+  }
+
+  const noteInvalid = (note) => (typeof note !== 'string' || note.trim().length === 0 || note.length > NOTE_MAX_CHARS
+    ? refuse('INVALID_ARGUMENT', `note must be a non-blank string of at most ${NOTE_MAX_CHARS} characters`)
+    : null);
+
+  const scriptBlock = (id, base, token) => ({ base_url: `${base}${id}/`, token, client: clientPath });
+
   async function end(id, reason, extra = {}) {
     const meta = store.get(id);
     if (!meta || meta.status !== 'live') return meta;
-    const r = rt(id);
-    r.stalled = false;
-    r.inflight = false;
-    const next = await store.update(id, { status: 'ended', end_reason: reason, stalled: false, updated_at: iso(), ...extra });
+    // The in-memory meta is ended as soon as update() is called, so no gate
+    // admits the session again and nothing re-creates the entries pruned here.
+    const saved = store.update(id, { status: 'ended', end_reason: reason, stalled: false, updated_at: iso(), ...extra });
+    runtime.delete(id);
+    access.forget(id);
+    const next = await saved;
     publishSession(next);
     return next;
   }
 
-  async function record(id, action, args, obs) {
+  // `tag` is {source:'tool'} or {source:'script', run}; never sent to the toolkit.
+  async function record(id, action, args, obs, tag) {
     const meta = store.get(id);
     const n = meta.step_count + 1;
-    const step = { n, ts: iso(), action, ...args, ...lastSummary(obs), frame: obs.frame };
+    // `n` first: the store pages by a line prefix.
+    const step = { n, ts: iso(), action, ...tag, ...args, ...lastSummary(obs), frame: obs.frame };
     const prev = store.lastFrame(id);
     await store.appendStep(id, step);
     const now = iso();
@@ -98,14 +141,34 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
     return { ok: true, meta: next, obs, prev, online: onlineInfo(next) };
   }
 
-  // Common gating for calls that act on a live session.
-  function gate(id, caller, { allowStalled = false } = {}) {
+  // Who may touch a live session: a script caller by its token (and, with
+  // `run`, the current run), a tool caller by ownership. An ended session
+  // refuses before the token is checked: its status and end_reason are public
+  // (GET api/sessions/:id) and its token entry is pruned at the end.
+  function admit(id, caller, { run = false } = {}) {
     const meta = store.get(id);
     if (!meta) return { refusal: refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids') };
     if (meta.status !== 'live') return { refusal: refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason }) };
+    const script = caller?.script;
+    if (script && !access.verify(id, script.token)) {
+      return { refusal: refuse('TOKEN_INVALID', 'the script token is not valid for this session (missing, wrong, or replaced by script_access)') };
+    }
+    if (script) {
+      const code = run ? access.checkRun(id, script.run) : null;
+      if (code) return { refusal: refuse(code, RUN_REFUSALS[code]) };
+      return { meta };
+    }
     const owner = meta.owner?.sessionId;
     const who = caller?.sessionId ?? null;
     if (owner && who && owner !== who) return { refusal: refuse('NOT_OWNER', 'another agent session started this game; leave it alone') };
+    return { meta };
+  }
+
+  // Common gating for calls that reach the toolkit on a live session.
+  function gate(id, caller, { allowStalled = false } = {}) {
+    const a = admit(id, caller, { run: true });
+    if (a.refusal) return a;
+    const { meta } = a;
     const r = rt(id);
     if (r.inflight) return { refusal: refuse('SESSION_BUSY', REASONS.SESSION_BUSY) };
     if (r.stalled && !allowStalled) return { refusal: refuse('SESSION_STALLED', 'a previous call timed out and has not finished; call observe, then retry later') };
@@ -115,14 +178,14 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
   }
 
   // A call that timed out answered late: apply it so history matches the toolkit.
-  function lateHandler(id, action, args) {
+  function lateHandler(id, action, args, tag) {
     return (reply) => {
-      const r = rt(id);
-      r.stalled = false;
       const meta = store.get(id);
+      // Ended meanwhile: its runtime entry is gone; don't re-create it.
       if (!meta || meta.status !== 'live') return;
+      rt(id).stalled = false;
       const done = reply.ok
-        ? record(id, action, args, reply.result.obs)
+        ? record(id, action, args, reply.result.obs, tag)
         : reply.code === 'SCORECARD_CLOSED'
           ? end(id, 'scorecard_auto_closed')
           : store.update(id, { stalled: false, updated_at: iso() }).then(publishSession);
@@ -130,15 +193,15 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
     };
   }
 
-  async function runStep(id, meta, r, op, action, args, sidecarArgs) {
+  async function runStep(id, meta, r, op, action, args, sidecarArgs, tag) {
     r.inflight = true;
     let res;
     try {
-      res = await sidecar.call(op, { session_id: id, ...sidecarArgs }, { timeoutMs: deadlines[op], onLate: lateHandler(id, action, args) });
+      res = await sidecar.call(op, { session_id: id, ...sidecarArgs }, { timeoutMs: deadlines[op], onLate: lateHandler(id, action, args, tag) });
     } finally {
       r.inflight = false;
     }
-    if (res.ok) return record(id, action, args, res.result.obs);
+    if (res.ok) return record(id, action, args, res.result.obs, tag);
     if (res.code === 'TOOLKIT_TIMEOUT') {
       r.stalled = true;
       publishSession(await store.update(id, { stalled: true, updated_at: iso() }));
@@ -161,6 +224,28 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
     return { ok: true, games: gamesCache };
   }
 
+  const tagOf = (caller) => (caller?.script ? { source: 'script', run: caller.script.run } : TOOL);
+
+  function observed(meta) {
+    const obs = { ...meta.last, frame: store.lastFrame(meta.id) };
+    return { ok: true, meta, obs, prev: null, online: meta.status === 'live' ? onlineInfo(meta) : undefined };
+  }
+
+  // Validates the note, opens the run (synchronously, so concurrent attaches
+  // get distinct runs), persists and announces the note.
+  async function openRun(id, meta, text) {
+    const bad = noteInvalid(text);
+    if (bad) return bad;
+    if (access.runCount(id) >= NOTES_MAX) return refuse('TOO_MANY_NOTES', `at most ${NOTES_MAX} notes per session; end_session and start a new one`);
+    const sr = stepRateGate(id);
+    if (sr) return sr;
+    const run = access.openRun(id);
+    const note = { run, ts: iso(), text, from_step: meta.step_count + 1 };
+    await store.appendNote(id, note);
+    hub.publish('note', { session_id: id, note });
+    return { ok: true, run };
+  }
+
   const gameListed = (games, gid) => games.some((g) => g.game_id === gid || g.game_id.split('-')[0] === gid);
 
   const sweepTimer = timers.setInterval(() => { sweep().catch((e) => log.error(`[code-arc] idle sweep failed: ${e.message}`)); }, SWEEP_MS);
@@ -179,6 +264,13 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
 
   return {
     sweep,
+
+    // The script route's gate before its body schema: SESSION_UNKNOWN →
+    // SESSION_ENDED → TOKEN_INVALID. Returns the refusal, or null.
+    admitScript: (id, token) => admit(id, { script: { token } }).refusal || null,
+
+    // Per-session in-memory entries (runtime state, script tokens); test seam.
+    _entryCounts: () => ({ runtime: runtime.size, tokens: access.size() }),
 
     async listGames() {
       const r = await knownGames(true);
@@ -204,6 +296,7 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
         }
         const rg = online ? rateGate(null, 2) : null;
         if (rg) return rg;
+        const base = scriptBase();
         const id = idGen();
         const res = await sidecar.call('open', { session_id: id, game_id: gameId, online: Boolean(online) }, {
           timeoutMs: deadlines.open,
@@ -234,7 +327,8 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
         rt(id);
         pendingStarts--;
         pendingReleased = true;
-        return record(id, 'START', {}, obs);
+        const started = await record(id, 'START', {}, obs, TOOL);
+        return { ...started, script: scriptBlock(id, base, access.mint(id)) };
       } finally {
         if (!pendingReleased) pendingStarts--;
       }
@@ -274,30 +368,70 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
       if (FINISHED.has(meta.last.state)) return refuse('GAME_FINISHED', `the game is in ${meta.last.state}; only reset or end_session`, { state: meta.last.state });
       const n = Number(action.slice(6));
       if (!meta.last.available_actions.includes(n)) return refuse('ACTION_UNAVAILABLE', `${action} is not available now`, { available_actions: meta.last.available_actions.map(actionName) });
+      const sg = stepGates(id, meta);
+      if (sg) return sg;
       const rg = rateGate(meta, 1);
       if (rg) return rg;
       const args = {};
       if (action === COMPLEX_ACTION) Object.assign(args, { x, y });
       if (reasoning) args.reasoning = reasoning;
-      return runStep(id, meta, r, 'step', action, args, { action, ...args });
+      return runStep(id, meta, r, 'step', action, args, { action, ...args }, tagOf(caller));
     },
 
     async reset({ session_id: id, reasoning }, caller) {
       const g = gate(id, caller);
       if (g.refusal) return g.refusal;
       if (reasoning !== undefined && (typeof reasoning !== 'string' || reasoning.length > REASONING_MAX_CHARS)) return refuse('INVALID_ARGUMENT', `reasoning must be a string of at most ${REASONING_MAX_CHARS} characters`);
+      const sg = stepGates(id, g.meta);
+      if (sg) return sg;
       const rg = rateGate(g.meta, 1);
       if (rg) return rg;
       // The toolkit's reset takes no reasoning; it is kept for the viewer.
       const args = reasoning ? { reasoning } : {};
-      return runStep(id, g.meta, g.r, 'reset', 'RESET', args, {});
+      return runStep(id, g.meta, g.r, 'reset', 'RESET', args, {}, tagOf(caller));
     },
 
-    observe({ session_id: id }) {
+    // Open to every tool caller, ended sessions included. A script caller
+    // needs its token, and an ended session refuses it like every script call.
+    observe({ session_id: id }, caller) {
+      if (caller?.script) {
+        const a = admit(id, caller);
+        if (a.refusal) return a.refusal;
+      }
       const meta = store.get(id);
       if (!meta) return refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids');
-      const obs = { ...meta.last, frame: store.lastFrame(id) };
-      return { ok: true, meta, obs, prev: null, online: meta.status === 'live' ? onlineInfo(meta) : undefined };
+      return observed(meta);
+    },
+
+    // A script starts: its note opens a new run (superseding any other).
+    // Returns the observation plus `run`.
+    async attach({ session_id: id, note }, caller) {
+      const a = admit(id, caller);
+      if (a.refusal) return a.refusal;
+      const run = await openRun(id, a.meta, note);
+      return run.ok ? { ...observed(store.get(id)), run: run.run } : run;
+    },
+
+    // The script's plan changed: a new run under the new note.
+    async note({ session_id: id, note }, caller) {
+      const a = admit(id, caller, { run: true });
+      if (a.refusal) return a.refusal;
+      return openRun(id, a.meta, note);
+    },
+
+    // A fresh script token for the owner (the old one stops working and the
+    // current run closes). Stricter than the other tools' collision guard:
+    // rotating kills a running script, so the caller must prove it is the
+    // owner — a known caller id equal to a known owner id.
+    scriptAccess({ session_id: id }, caller) {
+      const meta = store.get(id);
+      if (!meta) return refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids');
+      if (meta.status !== 'live') return refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason });
+      const owner = meta.owner?.sessionId;
+      // An empty id identifies no one, as in admit().
+      if (typeof owner !== 'string' || owner === '') return refuse('NOT_OWNER', 'this session was started by an unidentified caller, so no caller can prove it owns it and its script token cannot be rotated; keep using the token from start_session, or start a new session');
+      if (typeof caller?.sessionId !== 'string' || caller.sessionId === '' || caller.sessionId !== owner) return refuse('NOT_OWNER', 'only the agent session that started this game can rotate its script token');
+      return { ok: true, session_id: id, script: scriptBlock(id, scriptBase(), access.mint(id)) };
     },
 
     async end({ session_id: id }, caller) {

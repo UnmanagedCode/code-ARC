@@ -85,6 +85,18 @@
         }
       },
       {
+        "name": "script_access",
+        "description": "Get a fresh token for scripting this session (invalidates the previous one).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" }
+          },
+          "required": ["session_id"],
+          "additionalProperties": false
+        }
+      },
+      {
         "name": "list_sessions",
         "description": "List game sessions (newest first), e.g. to recover a session_id. scope 'mine' (default) is the ones you started.",
         "inputSchema": {

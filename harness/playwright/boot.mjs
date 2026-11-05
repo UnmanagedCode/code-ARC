@@ -7,10 +7,11 @@ import { BROWSER } from './resolve.mjs';
 const { bootServer } = await import(BROWSER);
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-export function bootArc() {
+// `entry` 'harness/playwright/server.mjs' boots with a raised step rate.
+export function bootArc({ entry = 'server.js' } = {}) {
   return bootServer({
     cwd: REPO,
-    entry: 'server.js',
+    entry,
     silent: true,
     sandbox: { dirs: { CONDUCTOR_PLUGIN_DATA_DIR: 'data', PROJECTS_ROOT: 'root' } },
     env: { CODE_ARC_PYTHON: 'python3', CODE_ARC_TEST_TOOLKIT_DIR: path.join(REPO, 'sidecar', 'tests', 'fakes') },

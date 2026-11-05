@@ -9,6 +9,8 @@
 //   dark.png           OS dark theme (standalone fallback tokens)
 //   banner.png         toolkit banner for a diverged venv, with its fix
 //   many.png           250 stored sessions: first page plus Load older
+//   script.png         scripted runs: run headers with notes, script badges
+//   script-burst.png   after a live 300-step script burst, still following
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
@@ -16,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
 import { bootArc, bootDiverged, bootSeeded, mcp } from './boot.mjs';
+import { SSE_MAX_CLIENTS } from '../../src/limits.js';
 
 const { withPage } = await import(BROWSER);
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
@@ -121,6 +124,76 @@ try {
   }, { viewport: { width: 1280, height: 900 } });
 } finally {
   await srv.close();
+}
+
+// Scripted play: attach over HTTP with a hostile note, two runs, then a live
+// 300-step burst (raised step rate) while the viewer follows.
+const fast = await bootArc({ entry: 'harness/playwright/server.mjs' });
+try {
+  const start = await mcp(fast.url, 'start_session', { game_id: 'fake-maze' });
+  const sid = start.meta.session_id;
+  const { base_url: base, token } = start.meta.script;
+  const play = async (op, body) => {
+    const res = await fetch(`${base}${op}`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
+    const out = await res.json();
+    if (!out.ok) throw new Error(`script ${op} refused: ${JSON.stringify(out)}`);
+    return out;
+  };
+  await mcp(fast.url, 'act', { session_id: sid, action: 'ACTION4', reasoning: 'Tool move before scripting.' });
+  let { run } = await play('attach', { note: '<img src=x onerror=alert(3)> Sweep: try each direction and watch which cells move.' });
+  for (const [i, action] of ['ACTION1', 'ACTION2', 'ACTION3', 'ACTION4', 'ACTION1'].entries()) await play('act', { run, action, reasoning: `sweep ${i + 1} of 5` });
+  ({ run } = await play('note', { run, note: 'Phase two: ACTION2 moves down; head toward the lower goal.' }));
+  for (let i = 0; i < 3; i++) await play('act', { run, action: 'ACTION2' });
+
+  await withPage(async (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    page.on('dialog', (d) => { problems.push(`dialog: ${d.message()}`); d.dismiss(); });
+    await page.goto(`${fast.url}/?session=${sid}`);
+    await page.locator('#steplog li').nth(9).waitFor();
+    const headers = await page.locator('.run-header').allTextContents();
+    if (headers.length !== 2) problems.push(`expected 2 run headers, got ${JSON.stringify(headers)}`);
+    if (!headers[0]?.startsWith('Script run 1 — <img src=x onerror=alert(3)> Sweep')) problems.push(`run 1 header: ${headers[0]}`);
+    if (!headers[1]?.startsWith('Script run 2 — Phase two')) problems.push(`run 2 header: ${headers[1]}`);
+    if (await page.locator('img').count()) problems.push('an <img> element was injected');
+    const badges = await page.locator('#steplog .badge.source-script').count();
+    if (badges !== 8) problems.push(`expected 8 script badges, got ${badges}`);
+    await page.waitForFunction(() => document.getElementById('reasoning').textContent.startsWith('Run 2 note: Phase two'));
+    if (!(await page.locator('#step-summary').textContent()).includes('· script ·')) problems.push('step summary lacks the script source');
+    await page.locator('#steplog').evaluate((e) => { e.scrollTop = 0; });
+    await shot(page, 'script.png');
+
+    // A tool step shows as such.
+    await page.getByRole('button', { name: /^#1 ACTION4/ }).click();
+    await page.waitForFunction(() => document.getElementById('step-summary').textContent.includes('· tool ·'));
+    if ((await page.locator('#reasoning').textContent()) !== 'Tool move before scripting.') problems.push('tool step reasoning');
+    await page.locator('#follow').check();
+
+    ({ run } = await play('note', { run, note: 'Burst: paint 300 cells to check the viewer keeps up.' }));
+    for (let i = 0; i < 300; i++) await play('act', { run, action: 'ACTION6', x: i % 64, y: 30 + Math.floor(i / 64), reasoning: `paint ${i + 1}` });
+    await page.locator('#steplog li').nth(309).waitFor({ timeout: 10000 });
+    await page.waitForFunction(() => document.getElementById('scrub-label').textContent === 'step 309 of 309', null, { timeout: 10000 });
+    if (!(await page.locator('#follow').isChecked())) problems.push('follow live turned off during the burst');
+    if (!(await page.locator('#reasoning').textContent()).startsWith('Run 3 note: Burst')) problems.push('burst reasoning pane');
+    const current = await page.locator('#steplog button[aria-current="true"]').textContent();
+    if (!current.startsWith('#309')) problems.push(`current log row: ${current}`);
+    await shot(page, 'script-burst.png');
+
+    // Reconnect catch-up: fill the SSE client cap so the page's stream is
+    // evicted, step while it is away, and expect only the missed steps fetched.
+    const stepFetches = [];
+    page.on('request', (r) => { const m = r.url().match(/\/steps\?from=(\d+)/); if (m) stepFetches.push(Number(m[1])); });
+    const hogs = new AbortController();
+    await Promise.all(Array.from({ length: SSE_MAX_CLIENTS }, () => fetch(`${fast.url}/api/events`, { signal: hogs.signal })));
+    for (let i = 0; i < 30; i++) await play('act', { run, action: 'ACTION6', x: i, y: 40, reasoning: `while away ${i + 1}` });
+    await page.waitForFunction(() => document.getElementById('scrub-label').textContent === 'step 339 of 339', null, { timeout: 15000 });
+    hogs.abort();
+    const rows = await page.locator('#steplog .step-head').allTextContents();
+    const ns = rows.map((t) => Number(t.match(/^#(\d+)/)[1]));
+    if (ns.length !== 340 || ns.some((n, i) => n !== i)) problems.push(`log after reconnect is not #0..#339 once each (${ns.length} rows)`);
+    if (!stepFetches.length || stepFetches.some((f) => f < 310)) problems.push(`reconnect fetched steps from ${JSON.stringify(stepFetches)}, expected only from 310`);
+  }, { viewport: { width: 1280, height: 900 } });
+} finally {
+  await fast.close();
 }
 
 const diverged = await bootDiverged();

@@ -2,6 +2,7 @@
 // kept live over SSE. Route state (?session=&step=) lives in the query string.
 import { getJson, subscribe } from './api.js';
 import { createGrid } from './grid.js';
+import { mergeNotes, noteFor, sourceOf } from './runs.js';
 import { safeHref } from './safeHref.js';
 import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
 import { createSettings } from './settings.js';
@@ -24,13 +25,18 @@ const state = {
   next: null, // cursor for the next older page, null when all are loaded
   selected: null,
   steps: [],
+  notes: [], // the selected session's script run notes
   cursor: -1,
   follow: true,
   loadToken: 0,
+  // While steps load, live steps wait here and are applied after the load.
+  loading: false,
+  pending: [],
+  renderQueued: false,
 };
 
 const grid = createGrid($('grid'), $('hover'));
-const log = createStepLog($('steplog'), (i) => setCursor(i, { manual: true }));
+const log = createStepLog($('steplog'), { onPick: (i) => setCursor(i, { manual: true }), noteOf: (step) => noteFor(state.notes, step) });
 createSettings($('settings'), $('settings-toggle'));
 
 const sortedSessions = () => [...state.sessions.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -115,14 +121,27 @@ function renderStep() {
   $('follow').checked = state.follow;
   if (step) {
     const xy = step.x !== undefined ? ` at (${step.x},${step.y})` : '';
-    $('step-summary').textContent = `#${step.n} ${step.action}${xy} · ${new Date(step.ts).toLocaleTimeString()} · ${step.frame_count} frame(s)`;
-    $('reasoning').textContent = step.reasoning || '(no reasoning given)';
+    $('step-summary').textContent = `#${step.n} ${step.action}${xy} · ${sourceOf(step)} · ${new Date(step.ts).toLocaleTimeString()} · ${step.frame_count} frame(s)`;
+    renderReasoning(step);
   } else {
     $('step-summary').textContent = '';
     $('reasoning').textContent = '';
   }
   log.select(state.cursor);
   renderHeader();
+}
+
+// A script step shows its run's note, then its own reasoning.
+function renderReasoning(step) {
+  const box = $('reasoning');
+  if (sourceOf(step) !== 'script') {
+    box.textContent = step.reasoning || '(no reasoning given)';
+    return;
+  }
+  const note = noteFor(state.notes, step);
+  const head = el('div', 'run-note');
+  head.append(el('strong', '', `Run ${step.run} note: `), note ? note.text : '(not loaded)');
+  box.replaceChildren(head, el('div', 'step-reasoning', step.reasoning || '(no step reasoning)'));
 }
 
 function setCursor(i, { manual = false } = {}) {
@@ -133,10 +152,8 @@ function setCursor(i, { manual = false } = {}) {
   writeRoute();
 }
 
-async function loadSteps(id, token) {
-  const s = state.sessions.get(id);
-  const total = Math.max(0, (s?.step_count ?? 0) + 1);
-  let from = Math.max(0, total - VIEWER_STEPS_MAX);
+// Steps with n >= from; null once the selection moved on.
+async function loadSteps(id, token, from) {
   const out = [];
   // Pages at the backend's own page size until an empty page.
   for (;;) {
@@ -149,41 +166,125 @@ async function loadSteps(id, token) {
   return out;
 }
 
+async function loadNotes(id, token) {
+  const { notes } = await getJson(`api/sessions/${encodeURIComponent(id)}/notes`);
+  return token === state.loadToken ? notes : null;
+}
+
+// Appends one step (ignoring any already held); past VIEWER_STEPS_MAX the
+// oldest row goes, in O(1).
+function addStep(step) {
+  if (state.steps.length && step.n <= state.steps.at(-1).n) return;
+  state.steps.push(step);
+  log.append(state.steps);
+  if (state.steps.length > VIEWER_STEPS_MAX) {
+    state.steps.shift();
+    log.trimFirst(state.steps);
+    state.cursor = Math.max(0, state.cursor - 1);
+  }
+}
+
+// One render per animation frame however fast steps arrive.
+function scheduleRender() {
+  if (state.renderQueued) return;
+  state.renderQueued = true;
+  requestAnimationFrame(() => {
+    state.renderQueued = false;
+    if (state.follow) setCursor(state.steps.length - 1);
+    else renderStep();
+  });
+}
+
+function startLoading() {
+  state.loading = true;
+  state.pending = [];
+}
+
+// Ends a load: applies the live steps that arrived meanwhile.
+function finishLoading() {
+  state.loading = false;
+  const pending = state.pending;
+  state.pending = [];
+  for (const step of pending) addStep(step);
+}
+
 async function select(id, wantStep = null) {
   state.selected = id;
   state.steps = [];
+  state.notes = [];
   state.cursor = -1;
   state.follow = wantStep === null;
   const token = ++state.loadToken;
+  startLoading();
   renderList();
   log.reset([]);
   renderStep();
   writeRoute();
-  const steps = await loadSteps(id, token);
-  if (!steps) return;
+  const total = Math.max(0, (state.sessions.get(id)?.step_count ?? 0) + 1);
+  let steps;
+  let notes;
+  try {
+    [steps, notes] = await Promise.all([loadSteps(id, token, Math.max(0, total - VIEWER_STEPS_MAX)), loadNotes(id, token)]);
+  } catch (e) {
+    // Keep following live steps from here on.
+    if (token === state.loadToken) finishLoading();
+    throw e;
+  }
+  if (!steps || !notes) return;
+  state.notes = mergeNotes(notes, state.notes);
   state.steps = steps;
   log.reset(steps);
-  let i = steps.length - 1;
+  finishLoading();
+  let i = state.steps.length - 1;
   if (wantStep !== null) {
-    const at = steps.findIndex((s) => s.n === wantStep);
+    const at = state.steps.findIndex((s) => s.n === wantStep);
     if (at >= 0) i = at;
   }
   setCursor(i);
 }
 
+// After a reconnect: fetch only the steps after the last one held, unless
+// the gap is past what the viewer keeps (then reload).
+async function catchUp() {
+  const id = state.selected;
+  const last = state.steps.at(-1);
+  const behind = (state.sessions.get(id)?.step_count ?? 0) - (last?.n ?? 0);
+  if (!last || state.loading || behind > VIEWER_STEPS_MAX) {
+    await select(id, state.follow ? null : state.steps[state.cursor]?.n ?? null);
+    return;
+  }
+  const token = state.loadToken;
+  startLoading();
+  try {
+    const [steps, notes] = await Promise.all([loadSteps(id, token, last.n + 1), loadNotes(id, token)]);
+    if (!steps || !notes) return;
+    state.notes = mergeNotes(notes, state.notes);
+    for (const n of state.notes) log.setNote(n);
+    for (const step of steps) addStep(step);
+  } finally {
+    // A newer selection owns the loading state now.
+    if (token === state.loadToken) {
+      finishLoading();
+      scheduleRender();
+    }
+  }
+}
+
 function onStep({ session_id: id, step }) {
   if (id !== state.selected) return;
-  if (state.steps.length && step.n <= state.steps.at(-1).n) return;
-  state.steps.push(step);
-  if (state.steps.length > VIEWER_STEPS_MAX) {
-    state.steps.shift();
-    log.reset(state.steps);
-    state.cursor = Math.max(0, state.cursor - 1);
-  } else {
-    log.append(step, state.steps.length - 1);
+  if (state.loading) {
+    state.pending.push(step);
+    return;
   }
-  if (state.follow) setCursor(state.steps.length - 1);
-  else renderStep();
+  addStep(step);
+  scheduleRender();
+}
+
+function onNote({ session_id: id, note }) {
+  if (id !== state.selected) return;
+  state.notes = mergeNotes(state.notes, [note]);
+  log.setNote(note);
+  scheduleRender();
 }
 
 function onStatus(status) {
@@ -257,7 +358,7 @@ subscribe({
       renderList();
       if (state.selected && state.sessions.has(state.selected)) {
         // A reconnect: catch up on anything missed.
-        select(state.selected, state.follow ? null : state.steps[state.cursor]?.n ?? null);
+        catchUp().catch(() => {});
       }
     }
   },
@@ -272,4 +373,5 @@ subscribe({
     if (isNew && !state.selected) select(meta.id);
   },
   step: onStep,
+  note: onNote,
 });

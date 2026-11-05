@@ -172,3 +172,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 }
 .step-row:hover { background: var(--muted); }
 .step-row[aria-current="true"] { background: var(--muted); box-shadow: inset 3px 0 0 var(--primary); }
+.step-head .badge { font-family: Geist, system-ui, -apple-system, "Segoe UI", sans-serif; }
+.badge.source-script { border-color: var(--primary); color: var(--primary); }
+.run-header {
+  padding: 0.3rem 0.6rem 0.2rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.run-note { margin-bottom: 0.5rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }

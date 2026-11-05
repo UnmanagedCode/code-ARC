@@ -8,6 +8,6 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node scripts/setup.mjs",
-    "test": "node tests/run.mjs && python3 -I -m unittest discover -s sidecar/tests -t ."
+    "test": "node tests/run.mjs && python3 -I -m unittest discover -s sidecar/tests -t . && python3 -I -m unittest discover -s clients/tests -t ."
   }
 }

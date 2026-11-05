@@ -129,7 +129,8 @@ test('an act publishes a step event over SSE', async (t) => {
 });
 
 test('session routes: list, get, paged steps bounded by STEPS_PAGE_MAX', async (t) => {
-  const { url, mcp } = await startApp(t);
+  // Back-to-back acts; the per-session step rate is not under test here.
+  const { url, mcp } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
   const sid = await startGame(mcp);
   for (let i = 0; i < STEPS_PAGE_MAX + 2; i++) await mcp('act', { session_id: sid, action: 'ACTION6', x: i % 64, y: 1, frame: 'none' });
   assert.equal((await json(`${url}/api/sessions`)).body.sessions[0].id, sid);
