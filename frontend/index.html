@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script src="/pluginBridge.js"></script>
+<link rel="stylesheet" href="/pluginTheme.css">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code ARC</title>
+<link rel="stylesheet" href="app.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <h1>Code ARC</h1>
+    <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings">Settings</button>
+  </header>
+  <div id="toolkit-banner" class="banner" role="status" hidden></div>
+  <section id="settings" class="settings panel" aria-label="Settings" hidden></section>
+  <div class="layout">
+    <aside class="sessions panel" aria-labelledby="sessions-heading">
+      <h2 id="sessions-heading">Sessions</h2>
+      <p id="sessions-empty" class="muted">No sessions yet. Ask an agent to play an ARC game.</p>
+      <ul id="session-list" class="session-list"></ul>
+      <button id="sessions-more" class="sessions-more" type="button" hidden>Load older sessions</button>
+    </aside>
+    <main class="viewer panel" aria-label="Viewer">
+      <div id="game-header" class="game-header"><p class="muted">Select a session.</p></div>
+      <div class="stage">
+        <div class="frame-col">
+          <div class="frame-wrap">
+            <canvas id="grid" width="64" height="64" role="img" aria-label="Game frame"></canvas>
+          </div>
+          <div id="hover" class="hover muted" aria-live="off">&nbsp;</div>
+          <div class="scrubber" aria-label="Replay">
+            <button id="prev" type="button" aria-label="Previous step">&#9664;</button>
+            <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Step">
+            <button id="next" type="button" aria-label="Next step">&#9654;</button>
+            <span id="scrub-label" class="scrub-label muted"></span>
+            <label class="follow"><input id="follow" type="checkbox" checked> Follow live</label>
+          </div>
+        </div>
+        <section class="reasoning" aria-labelledby="reasoning-heading">
+          <h3 id="reasoning-heading">Reasoning</h3>
+          <div id="step-summary" class="step-summary muted"></div>
+          <div id="reasoning" class="reasoning-text"></div>
+        </section>
+      </div>
+      <section class="log" aria-labelledby="log-heading">
+        <h3 id="log-heading">Action log</h3>
+        <ol id="steplog" class="steplog"></ol>
+      </section>
+    </main>
+  </div>
+</div>
+</body>
+</html>
