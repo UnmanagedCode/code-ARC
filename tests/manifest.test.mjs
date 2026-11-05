@@ -35,7 +35,7 @@ test('schemas stay within the subset cc accepts', () => {
 });
 
 test('schema bounds equal src/limits.js', () => {
-  const sessionTools = ['act', 'reset', 'observe', 'end_session'];
+  const sessionTools = ['act', 'reset', 'observe', 'end_session', 'script_access'];
   for (const t of sessionTools) assert.equal(tools[t].properties.session_id.pattern, SESSION_ID_RE.source, t);
   assert.equal(tools.start_session.properties.game_id.pattern, GAME_ID_RE.source);
   for (const c of ['x', 'y']) {

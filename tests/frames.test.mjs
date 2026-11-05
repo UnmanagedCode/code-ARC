@@ -9,8 +9,8 @@ const set = (rows, x, y, v) => rows.map((r, i) => (i === y ? r.slice(0, x) + v +
 test('full frame: x header (tens, units) and yy| row labels', () => {
   const lines = renderFull(blank()).split('\n');
   assert.equal(lines.length, 66);
-  assert.equal(lines[0], `   ${'0'.repeat(10)}${'1'.repeat(10)}${'2'.repeat(10)}${'3'.repeat(10)}${'4'.repeat(10)}${'5'.repeat(10)}6666`);
-  assert.equal(lines[1], `   ${'0123456789'.repeat(6)}0123`);
+  assert.equal(lines[0], `xx|${'0'.repeat(10)}${'1'.repeat(10)}${'2'.repeat(10)}${'3'.repeat(10)}${'4'.repeat(10)}${'5'.repeat(10)}6666`);
+  assert.equal(lines[1], `xx|${'0123456789'.repeat(6)}0123`);
   assert.equal(lines[2], `00|${'5'.repeat(64)}`);
   assert.equal(lines[65], `63|${'5'.repeat(64)}`);
 });
@@ -57,4 +57,42 @@ test('diff without a previous frame is sent full; none is empty', () => {
   assert.deepEqual(frameText('diff', null, blank()).frame, { mode: 'full', auto_full: true });
   assert.deepEqual(frameText('none', null, blank()), { text: '', frame: { mode: 'none' } });
   assert.equal(frameText('full', null, null).text, 'no frame');
+});
+
+test('no frame-text line starts with whitespace, full or diff', () => {
+  const prev = blank();
+  const next = set(prev, 5, 5, 'a');
+  for (const text of [renderFull(next), renderDiff(prev, next).text]) {
+    for (const line of text.split('\n')) assert.doesNotMatch(line, /^\s/, line);
+  }
+});
+
+test('cell x sits at index 3 + x on every row, under its digits on both header lines', () => {
+  let rows = blank();
+  for (const [x, y] of [[0, 0], [9, 1], [10, 2], [37, 9], [63, 63]]) rows = set(rows, x, y, 'f');
+  const lines = renderFull(rows).split('\n');
+  for (const [x, y] of [[0, 0], [9, 1], [10, 2], [37, 9], [63, 63]]) {
+    assert.equal(lines[0][3 + x] + lines[1][3 + x], String(x).padStart(2, '0'));
+    assert.equal(lines[2 + y][3 + x], 'f');
+  }
+  const diff = renderDiff(blank(), rows).text.split('\n');
+  assert.equal(diff[0][3 + 37] + diff[1][3 + 37], '37');
+  assert.equal(diff.find((l) => l.startsWith('09|'))[3 + 37], 'f');
+});
+
+test('changed_cells equals a positional count of differing cells', () => {
+  const prev = blank();
+  let next = prev;
+  const cells = [[0, 0], [1, 0], [63, 0], [20, 30], [21, 30], [5, 63]];
+  for (const [x, y] of cells) next = set(next, x, y, 'c');
+  let count = 0;
+  for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) if (prev[y][x] !== next[y][x]) count++;
+  assert.equal(count, cells.length);
+  assert.equal(renderDiff(prev, next).changed_cells, count);
+});
+
+test('bbox spans to a changed status-bar cell at (63,63)', () => {
+  const prev = blank();
+  const next = set(set(prev, 10, 12, '9'), 63, 63, '1');
+  assert.deepEqual(renderDiff(prev, next).bbox, { x0: 10, y0: 12, x1: 63, y1: 63 });
 });

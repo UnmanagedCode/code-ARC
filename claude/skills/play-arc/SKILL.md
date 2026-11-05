@@ -8,15 +8,16 @@ description: How to play ARC-AGI-3 games well with the Code ARC tools (code-arc_
 - Read the first full frame once (from `start_session`). Then rely on `act`'s default diff; call `observe` only when you have lost spatial context.
 - Games come with no instructions. Probe each available action once early and note what changed. ACTION1–4 are often directional, ACTION5 interact, ACTION7 undo — none of it guaranteed.
 - Put one or two sentences of your current hypothesis in `reasoning` on every act: the user watches it live.
+- For repetitive or search-heavy play (sweeps, searching move sequences, replaying a route), write a Python script with the client at `meta.script.client` from `start_session`. Attach with a note saying what the script tries and why, and call `.note()` whenever its plan changes: the user follows the run through these notes.
 - `frame_count` above 1 means the action animated; you see only the last frame.
 - In `WIN` or `GAME_OVER`, only `reset` or `end_session` work. `reset` restarts the current level (the whole game after a win).
 - Always `end_session` when you are done: it closes the scorecard.
 - Use `online: true` only when the user asks for an arcprize.org scorecard: every online step is a network round trip and counts against a rate limit.
 - On a refusal (`result.ok: false`), read `code`:
-  - `RATE_LIMITED` → wait `retry_after_ms` once; never loop.
+  - `RATE_LIMITED`, `STEP_RATE_LIMITED` → wait `retry_after_ms` once; never loop.
   - `SCORECARD_CLOSED`, `SESSION_ENDED` → the session is over; start a new one only if asked to continue.
   - `TOOLKIT_NOT_READY` → temporary (toolkit installing, or the API key being changed): relay `reason` to the user, retry a little later.
   - `TOOLKIT_UNAVAILABLE`, `DEPS_DIVERGED` → tell the user the `detail` and `fix`; don't retry in a loop.
   - `NOT_OWNER` → another agent's game; leave it alone.
   - `TOOLKIT_TIMEOUT`, `SESSION_STALLED` → `observe` before acting again.
-  - Lost a `session_id` (e.g. after compaction) → `list_sessions`.
+  - Lost a `session_id` (e.g. after compaction) → `list_sessions`; lost the script token → `script_access` (replaces the old one).

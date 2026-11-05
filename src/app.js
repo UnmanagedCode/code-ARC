@@ -12,6 +12,7 @@ import { createSseHub } from './sse.js';
 import { createStatic } from './static.js';
 import { createStore } from './store.js';
 import { createRouter, HttpError, onClientError, readJsonBody, SECURITY_HEADERS, sendJson } from './http.js';
+import { scriptRoutes } from './scriptRoutes.js';
 import { SESSION_ID_RE, SESSIONS_PAGE_MAX, STEPS_PAGE_MAX } from './limits.js';
 
 export async function createApp({
@@ -25,6 +26,7 @@ export async function createApp({
   sseKeepaliveMs,
   deadlines,
   onlineRpmLimit,
+  stepRate,
 }) {
   const store = createStore({ dataDir: config.dataDir, log });
   await store.init();
@@ -56,7 +58,17 @@ export async function createApp({
     onExit: ({ expected }) => { if (!expected) sessions?.onSidecarExit().catch((e) => log.error(`[code-arc] ending sessions after sidecar exit failed: ${e.message}`)); },
     onStatus: publishStatus,
   });
-  sessions = createSessions({ store, sidecar, bootstrap, hub, clock, timers, log, ...(deadlines ? { deadlines } : {}), ...(onlineRpmLimit ? { onlineRpmLimit } : {}) });
+  // The script API is the backend's own address: one hop, no cc proxy. The
+  // port is read when a session starts, after the server listens.
+  const scriptBase = () => {
+    const addr = server.address();
+    if (!addr || typeof addr !== 'object') throw new Error('the server is not listening yet');
+    return `http://127.0.0.1:${addr.port}/api/play/`;
+  };
+  sessions = createSessions({
+    store, sidecar, bootstrap, hub, scriptBase, checkoutDir: config.checkoutDir, clock, timers, log,
+    ...(deadlines ? { deadlines } : {}), ...(onlineRpmLimit ? { onlineRpmLimit } : {}), ...(stepRate ? { stepRate } : {}),
+  });
   const mcp = createMcp({ sessions, log });
   const serveStatic = createStatic({ frontendDir: path.join(config.checkoutDir, 'frontend') });
 
@@ -89,6 +101,10 @@ export async function createApp({
       const limit = Math.min(STEPS_PAGE_MAX, Math.max(1, Number.parseInt(url.searchParams.get('limit') || String(STEPS_PAGE_MAX), 10) || STEPS_PAGE_MAX));
       sendJson(res, 200, { steps: await store.readSteps(params.id, from, limit) });
     }],
+    ['GET', sessionRoute('/notes'), async (req, res, { params }) => {
+      sessionOr404(params.id);
+      sendJson(res, 200, { notes: await store.readNotes(params.id) });
+    }],
     ['GET', '/api/events', (req, res) => hub.handle(req, res, [['status', statusBody()], ['sessions', store.page({ limit: SESSIONS_PAGE_MAX })]])],
     ['GET', '/api/settings', async (req, res) => sendJson(res, 200, { apiKey: await keyStore.status() })],
     ['PUT', '/api/settings/api-key', async (req, res) => {
@@ -104,6 +120,7 @@ export async function createApp({
     }],
     ['DELETE', '/api/settings/api-key', async (req, res) => changeKey(res, () => keyStore.clear())],
     ['POST', '/api/mcp', async (req, res) => sendJson(res, 200, await mcp.handle(await readJsonBody(req)))],
+    ...scriptRoutes({ sessions }),
   ];
 
   const server = http.createServer(createRouter({ routes, fallback: serveStatic, log }));

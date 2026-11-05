@@ -1,0 +1,27 @@
+// Script runs in the viewer: which steps a script took, where a run header
+// goes in the action log, and the note that explains a run. Pure: no DOM.
+
+// A step without `source` predates scripting and came from a tool.
+export const sourceOf = (step) => (step?.source === 'script' ? 'script' : 'tool');
+
+// A script step starts a run segment when the step loaded before it is not in
+// the same run (a tool step, another run, or nothing loaded before it).
+export function needsRunHeader(steps, i) {
+  const step = steps[i];
+  if (sourceOf(step) !== 'script') return false;
+  const prev = steps[i - 1];
+  return !prev || sourceOf(prev) !== 'script' || prev.run !== step.run;
+}
+
+// The note that opened a script step's run, or null (tool step, or not loaded).
+export function noteFor(notes, step) {
+  if (sourceOf(step) !== 'script') return null;
+  return notes.find((n) => n.run === step.run) || null;
+}
+
+// `loaded` plus any note of `live` it lacks (one arrived while loading), by run.
+export function mergeNotes(loaded, live) {
+  const out = [...loaded];
+  for (const n of live) if (!out.some((m) => m.run === n.run)) out.push(n);
+  return out.sort((a, b) => a.run - b.run);
+}

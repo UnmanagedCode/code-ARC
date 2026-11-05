@@ -1,12 +1,15 @@
 // Text renderings of a frame for the agent: one hex digit per cell (the
 // palette index), a two-line x header (tens, units) and a `yy|` row label.
+// Column x sits at index 3 + x on every line.
 import { DIFF_MAX_ROWS } from './limits.js';
 
-const LABEL = '   '; // width of "yy|"
+// Same width as the "yy|" row label. Visible, not blank: a layer that trims
+// leading whitespace would otherwise shift the header against the rows.
+const HEADER_LABEL = 'xx|';
 
 function header(width) {
-  let tens = LABEL;
-  let units = LABEL;
+  let tens = HEADER_LABEL;
+  let units = HEADER_LABEL;
   for (let x = 0; x < width; x++) {
     tens += String(Math.floor(x / 10) % 10);
     units += String(x % 10);
@@ -20,8 +23,10 @@ export function renderFull(rows) {
   return [header(rows[0].length), ...rows.map((r, y) => row(y, r))].join('\n');
 }
 
-// Changed rows only. Returns {text, changed_cells, bbox}; bbox is
-// {x0, y0, x1, y1} inclusive, or null with no change.
+// Changed rows only, compared with `prev` (the previous step's last frame;
+// animation frames in between are not seen). Returns {text, changed_cells,
+// bbox}; bbox is {x0, y0, x1, y1} inclusive over every changed cell, status-bar
+// cells included, or null with no change.
 export function renderDiff(prev, rows) {
   const lines = [];
   let changed = 0;

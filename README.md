@@ -2,11 +2,11 @@
 
 A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that lets agents play **ARC-AGI-3** games through the official `arc-agi` toolkit, while you watch: the live frame, every action, the agent's reasoning, and a replay scrubber.
 
-- **For agents:** MCP tools (`code-arc__list_games`, `code-arc__start_session`, `code-arc__act`, …) plus a `play-arc` skill that teaches good play.
+- **For agents:** MCP tools (`code-arc__list_games`, `code-arc__start_session`, `code-arc__act`, …) plus a `play-arc` skill that teaches good play, and a Python client (`clients/code_arc.py`) for scripted play over the plugin's script HTTP API.
 - **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, and replay.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
-Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests).
+Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, script HTTP API and client, wire formats) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests).
 
 ## Quick start
 
@@ -25,6 +25,8 @@ Standalone (no cc): `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir PORT=8791 node serv
 | Live sessions | capped | `MAX_LIVE_SESSIONS` in `src/limits.js` |
 | Reasoning length | capped, plus the toolkit's own byte bound | `REASONING_MAX_CHARS` in `src/limits.js`; `MAX_REASONING_BYTES` in `arcengine` |
 | Online rate limit / idle close | refused locally / session ended | `ONLINE_RPM_LIMIT`, `ONLINE_IDLE_CLOSE_MS` in `src/online.js` |
+| Step rate per session (tools and scripts) | refused with `STEP_RATE_LIMITED` | `STEP_RATE_MAX` per `STEP_RATE_WINDOW_MS` in `src/limits.js` |
+| Steps per session | refused with `SESSION_STEP_LIMIT` | `SESSION_STEPS_MAX` in `src/limits.js` |
 | State | `$CONDUCTOR_PLUGIN_DATA_DIR` only | `src/store.js` |
 
 ## Stack
@@ -48,11 +50,13 @@ The backend enforces this: a symlinked `.venv` whose pins differ puts the toolki
 - **Local mode runs game code from arcprize.org.** The toolkit downloads each game's Python source and executes it (its NORMAL-mode design) inside the sidecar process, as your user, with the sidecar's cwd inside the plugin data dir. A hostile game could therefore read anything that process can, **including the API key** the sidecar holds in memory and the files your user can read. For a game you don't trust, start it with `online:true`: ONLINE mode runs the game on arcprize.org and never executes its code locally.
 - **The API key** is stored at `<data dir>/secrets.json` (mode 0600) and shown only masked. The backend sends it to the sidecar over stdin (never env or argv) and redacts it from the logs and tool results it produces; that protects against accidental leaks, not against code running inside the sidecar (above). Changing it requires no live or starting sessions.
 - The backend binds `127.0.0.1` only; every response carries a strict CSP; non-GET routes require same-origin JSON.
+- **Script tokens** (one per session, for `api/play/*`) live only in the backend's memory, as a sha256, and die with the process. They are accepted only in the `Authorization: Bearer` header, compared in constant time, and appear only in `start_session`'s and `script_access`'s results: never on disk, in steps, notes, SSE, `api/*` or logs. Script routes refuse any request carrying `Origin` or `Sec-Fetch-Site`, so a browser page can't drive them.
 
 ## Known limitations
 
 - Agents see only the **last** frame of a multi-frame action (`frame_count` says how many there were).
-- No retention policy: every step (one frame each) stays in the data dir until you delete it.
+- Steps are stored compressed and capped per session (`SESSION_STEPS_MAX`); there is still no retention across sessions: every session's steps stay in the data dir until you delete them.
+- Scripted play needs Bash on cc's host; workers on a remote System can only use the tools.
 - `requirements.txt` pins versions but not hashes (wheels are platform-specific).
 - Live sessions end when the backend restarts (toolkit environments are in-process).
 - Online sessions need network, are rate-limited, and their scorecards auto-close after idling; arcprize.org's server-side reasoning bound is checked conservatively.

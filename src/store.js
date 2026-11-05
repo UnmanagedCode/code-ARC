@@ -2,17 +2,43 @@
 // files besides the key store:
 //   sessions/<sid>/meta.json    atomic, the session's current state
 //   sessions/<sid>/steps.jsonl  append-only, one line per step
+//   sessions/<sid>/notes.jsonl  append-only, one line per script run note
+// A step line stores its frame as `frame_z` (base64 raw deflate of the rows
+// joined by '\n'); every step this module hands out has `frame` rows again.
+// Lines written with a plain `frame` still read.
 // The latest frame of each session is kept in memory for observe and diffs.
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { writeFileAtomic, readJsonBounded } from './atomicFile.js';
 import { SESSION_ID_RE } from './limits.js';
 
 const META_MAX_BYTES = 64 * 1024;
-// A step line holds one frame (~4.2 KB) plus reasoning; read this much of the
-// file's tail to find the last one.
+// A step line holds one compressed frame (typically well under 1 KB) plus up
+// to REASONING_MAX_CHARS of reasoning, and a legacy line a ~4.2 KB plain
+// frame; read this much of the file's tail to find the last one.
 const TAIL_READ_BYTES = 256 * 1024;
+// Step lines start with their number (`record` in src/sessions.js builds `n`
+// first), so paging skips earlier lines without parsing them.
+const STEP_N = /^\{"n":(\d+),/;
+
+function encodeStep(step) {
+  // An empty frame has no rows to join; it stays plain.
+  if (!Array.isArray(step.frame) || step.frame.length === 0) return JSON.stringify(step);
+  const { frame, ...rest } = step;
+  return JSON.stringify({ ...rest, frame_z: deflateRawSync(frame.join('\n')).toString('base64') });
+}
+
+// One stored line back to a step with `frame` rows. Throws on a malformed line.
+function decodeStep(line) {
+  const step = JSON.parse(line);
+  if (typeof step.frame_z === 'string') {
+    const { frame_z: z, ...rest } = step;
+    return { ...rest, frame: inflateRawSync(Buffer.from(z, 'base64')).toString('utf8').split('\n') };
+  }
+  return step;
+}
 
 export async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
@@ -85,7 +111,7 @@ export function createStore({ dataDir, log = console }) {
         const line = await lastLine(path.join(dirOf(id), 'steps.jsonl'));
         if (line) {
           try {
-            const step = JSON.parse(line);
+            const step = decodeStep(line);
             if (Array.isArray(step.frame)) lastFrames.set(id, step.frame);
           } catch {
             log.error(`[code-arc] session ${id}: last step line is malformed`);
@@ -136,7 +162,30 @@ export function createStore({ dataDir, log = console }) {
 
     appendStep(id, step) {
       if (Array.isArray(step.frame)) lastFrames.set(id, step.frame);
-      return chain(id, () => fs.appendFile(path.join(dirOf(id), 'steps.jsonl'), `${JSON.stringify(step)}\n`, { mode: 0o600 }));
+      const line = `${encodeStep(step)}\n`;
+      return chain(id, () => fs.appendFile(path.join(dirOf(id), 'steps.jsonl'), line, { mode: 0o600 }));
+    },
+
+    appendNote(id, note) {
+      const line = `${JSON.stringify(note)}\n`;
+      return chain(id, () => fs.appendFile(path.join(dirOf(id), 'notes.jsonl'), line, { mode: 0o600 }));
+    },
+
+    // Every note of a session, in order (at most NOTES_MAX are ever written).
+    async readNotes(id) {
+      let text;
+      try {
+        text = await fs.readFile(path.join(dirOf(id), 'notes.jsonl'), 'utf8');
+      } catch (e) {
+        if (e.code === 'ENOENT') return [];
+        throw e;
+      }
+      const out = [];
+      for (const line of text.split('\n')) {
+        if (!line) continue;
+        try { out.push(JSON.parse(line)); } catch { /* a torn last line */ }
+      }
+      return out;
     },
 
     // Steps with n >= from, at most `limit`, in order.
@@ -154,8 +203,10 @@ export function createStore({ dataDir, log = console }) {
       try {
         for await (const line of rl) {
           if (!line) continue;
+          const m = STEP_N.exec(line);
+          if (m && Number(m[1]) < from) continue;
           let step;
-          try { step = JSON.parse(line); } catch { continue; }
+          try { step = decodeStep(line); } catch { continue; }
           if (step.n < from) continue;
           out.push(step);
           if (out.length >= limit) break;
