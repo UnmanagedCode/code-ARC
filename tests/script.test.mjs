@@ -4,8 +4,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
-import { freshEnv, json, sseCollect, startApp, startGame } from './_helpers.mjs';
-import { BODY_MAX_BYTES, NOTE_MAX_CHARS, NOTES_MAX, SESSION_STEPS_MAX, STEP_RATE_MAX, STEP_RATE_WINDOW_MS } from '../src/limits.js';
+import { freshEnv, json, sendJsonReq, sseCollect, startApp, until } from './_helpers.mjs';
+import { ONLINE_IDLE_CLOSE_MS } from '../src/online.js';
+import { BODY_MAX_BYTES, DEADLINES, NOTE_MAX_CHARS, NOTES_MAX, SESSION_STEPS_MAX, STEP_RATE_MAX, STEP_RATE_WINDOW_MS } from '../src/limits.js';
 
 const A = { sessionId: 'agent-a', project: 'proj' };
 const B = { sessionId: 'agent-b', project: 'other' };
@@ -28,6 +29,56 @@ async function scripted(mcp, extra = {}, caller = A) {
   assert.ok(r.meta, JSON.stringify(r));
   return { sid: r.meta.session_id, script: r.meta.script };
 }
+
+const ended = (app, sid) => app.store.get(sid).status === 'ended';
+
+test('per-session entries are pruned when a session ends, by every path', async (t) => {
+  const clock = fakeClock();
+  const { app, mcp } = await startApp(t, { clock, timers: manualTimers, deadlines: { ...DEADLINES, step: 150 } });
+  const counts = () => app.sessions._entryCounts();
+  const zero = { runtime: 0, tokens: 0 };
+
+  // end_session, after script and tool steps.
+  const a = await scripted(mcp);
+  await play(a.script.base_url, 'attach', { note: 'n' }, { token: a.script.token });
+  await play(a.script.base_url, 'act', { run: 1, action: 'ACTION1' }, { token: a.script.token });
+  assert.deepEqual(counts(), { runtime: 1, tokens: 1 });
+  await mcp('end_session', { session_id: a.sid });
+  assert.deepEqual(counts(), zero);
+  assert.equal((await play(a.script.base_url, 'observe', {}, { token: a.script.token })).body.code, 'SESSION_ENDED');
+  assert.deepEqual(counts(), zero, 'a refused call re-creates nothing');
+
+  // SCORECARD_CLOSED.
+  const closed = await scripted(mcp, { game_id: 'fake-closed', online: true });
+  assert.equal((await mcp('act', { session_id: closed.sid, action: 'ACTION1' })).result.code, 'SCORECARD_CLOSED');
+  assert.deepEqual(counts(), zero);
+
+  // Idle sweep.
+  const idle = await scripted(mcp, { online: true });
+  await mcp('act', { session_id: idle.sid, action: 'ACTION1' });
+  clock.advance(ONLINE_IDLE_CLOSE_MS);
+  await app.sessions.sweep();
+  assert.ok(ended(app, idle.sid));
+  assert.deepEqual(counts(), zero);
+
+  // A late reply to a session ended meanwhile.
+  let lateSeen = false;
+  const call = app.sidecar.call;
+  app.sidecar.call = (op, args, o = {}) => call(op, args, o.onLate ? { ...o, onLate: (r) => { o.onLate(r); lateSeen = true; } } : o);
+  const slow = await scripted(mcp, { game_id: 'fake-slow' });
+  assert.equal((await mcp('act', { session_id: slow.sid, action: 'ACTION1' })).result.code, 'TOOLKIT_TIMEOUT');
+  await mcp('end_session', { session_id: slow.sid });
+  await until(() => lateSeen);
+  assert.deepEqual(counts(), zero);
+  assert.equal(app.store.get(slow.sid).step_count, 0, 'the late step is not recorded on the ended session');
+
+  // Sidecar exit ends every live session.
+  const other = await scripted(mcp);
+  const crash = await scripted(mcp, { game_id: 'fake-crash' });
+  assert.equal((await mcp('act', { session_id: crash.sid, action: 'ACTION1' })).result.code, 'SIDECAR_EXITED');
+  await until(() => ended(app, other.sid) && ended(app, crash.sid));
+  assert.deepEqual(counts(), zero);
+});
 
 const stepCalls = async (calls) => (await calls()).filter((c) => c.op === 'step' || c.op === 'reset').length;
 
@@ -178,24 +229,69 @@ test('script_access rotates the token and clears the run', async (t) => {
   assert.equal((await mcp('script_access', { session_id: sid })).result.code, 'SESSION_ENDED');
 });
 
-test('lifetime: an ended session refuses with its end_reason; a restart invalidates every token', async (t) => {
+test('lifetime: an ended session refuses SESSION_ENDED with its end_reason before any token check, also after a restart', async (t) => {
   const env = await freshEnv(t);
   const first = await startApp(t, { env });
   const { sid, script } = await scripted(first.mcp);
-  const tok = { token: script.token };
-  await play(script.base_url, 'attach', { note: 'n' }, tok);
+  await play(script.base_url, 'attach', { note: 'n' }, { token: script.token });
   await first.mcp('end_session', { session_id: sid });
-  for (const [op, body] of [['act', { run: 1, action: 'ACTION1' }], ['observe', {}], ['attach', { note: 'n' }], ['note', { run: 1, note: 'n' }]]) {
-    const r = await play(script.base_url, op, body, tok);
-    assert.deepEqual([r.status, r.body.code, r.body.end_reason], [200, 'SESSION_ENDED', 'ended_by_agent'], op);
+  for (const token of [script.token, 'wrong-token', undefined]) {
+    for (const [op, body] of [['act', { run: 1, action: 'ACTION1' }], ['observe', {}], ['attach', { note: 'n' }], ['note', { run: 1, note: 'n' }]]) {
+      const r = await play(script.base_url, op, body, { token });
+      assert.deepEqual([r.status, r.body.code, r.body.end_reason], [200, 'SESSION_ENDED', 'ended_by_agent'], `${op} ${token}`);
+    }
   }
   const live = await scripted(first.mcp);
   await first.close();
 
+  // After a restart the session is ended as backend_restart; its old token is
+  // unknown, which the ended gate never reaches.
   const second = await startApp(t, { env });
   const base = `${second.url}/api/play/${live.sid}/`;
-  const r = await play(base, 'observe', {}, { token: live.script.token });
-  assert.deepEqual([r.status, r.body.code], [401, 'TOKEN_INVALID']);
+  for (const token of [live.script.token, 'wrong-token']) {
+    const r = await play(base, 'act', { run: 1, action: 'ACTION1' }, { token });
+    assert.deepEqual([r.status, r.body.code, r.body.end_reason], [200, 'SESSION_ENDED', 'backend_restart'], String(token));
+  }
+});
+
+test('the script route gates session and token before the body schema', async (t) => {
+  const { mcp } = await startApp(t);
+  const { sid, script } = await scripted(mcp);
+  const bad = { run: 'one', action: 'ACTION9', extra: true };
+  const unknown = await play(script.base_url.replace(sid, 's-ffffffffffff'), 'act', bad, { token: script.token });
+  assert.deepEqual([unknown.status, unknown.body.code], [200, 'SESSION_UNKNOWN']);
+  const rotated = (await mcp('script_access', { session_id: sid })).result.script.token;
+  const stale = await play(script.base_url, 'act', bad, { token: script.token });
+  assert.deepEqual([stale.status, stale.body.code], [401, 'TOKEN_INVALID']);
+  const live = await play(script.base_url, 'act', bad, { token: rotated });
+  assert.deepEqual([live.status, live.body.code], [200, 'INVALID_ARGUMENT'], 'the schema still applies once admitted');
+  await mcp('end_session', { session_id: sid });
+  const ended = await play(script.base_url, 'act', bad, { token: rotated });
+  assert.deepEqual([ended.status, ended.body.code, ended.body.end_reason], [200, 'SESSION_ENDED', 'ended_by_agent']);
+});
+
+test('script_access needs a known caller equal to a known owner; other tools keep the null-caller policy', async (t) => {
+  const { app, url, mcp } = await startApp(t);
+  const NULL = { sessionId: null, project: null };
+  const { sid, script } = await scripted(mcp, {}, A);
+  await play(script.base_url, 'attach', { note: 'owner script' }, { token: script.token });
+  // The probe: a raw api/mcp POST with no caller at all.
+  const raw = await sendJsonReq(`${url}/api/mcp`, 'POST', { tool: 'script_access', arguments: { session_id: sid } });
+  assert.equal(raw.body.result.code, 'NOT_OWNER');
+  assert.equal((await app.mcp.handle({ tool: 'script_access', arguments: { session_id: sid }, caller: { sessionId: 42 } })).result.code, 'NOT_OWNER');
+  assert.equal((await mcp('script_access', { session_id: sid }, NULL)).result.code, 'NOT_OWNER');
+  assert.ok((await play(script.base_url, 'act', { run: 1, action: 'ACTION1' }, { token: script.token })).body.ok, 'the token and run survived');
+  assert.ok((await mcp('act', { session_id: sid, action: 'ACTION1' }, NULL)).meta, 'a null caller may still act');
+  assert.equal((await mcp('script_access', { session_id: sid }, A)).result.ok, true);
+
+  const anon = await scripted(mcp, {}, NULL);
+  for (const caller of [NULL, A]) {
+    const r = (await mcp('script_access', { session_id: anon.sid }, caller)).result;
+    assert.equal(r.code, 'NOT_OWNER', JSON.stringify(caller));
+    assert.match(r.reason, /unidentified caller/);
+  }
+  assert.ok((await play(anon.script.base_url, 'attach', { note: 'n' }, { token: anon.script.token })).body.ok, 'its start_session token still works');
+  assert.ok((await mcp('act', { session_id: anon.sid, action: 'ACTION1' }, B)).meta, 'an unowned session stays open to other tools');
 });
 
 test(`step rate: ${STEP_RATE_MAX} steps per window across scripts and tools, refused without reaching the toolkit`, async (t) => {

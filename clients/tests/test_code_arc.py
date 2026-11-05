@@ -6,7 +6,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from clients.code_arc import Observation, Refusal, Session, TransportError
+from clients.code_arc import MAX_RESPONSE_BYTES, Observation, Refusal, Session, TransportError
 
 TOKEN = "tok_ABC-123"
 
@@ -141,6 +141,20 @@ class ClientTest(unittest.TestCase):
         self.fake.replies.append((200, b"<html>"))
         with self.assertRaises(TransportError):
             s.observe()
+
+    def test_oversized_bodies_are_transport_errors(self):
+        s = self.attach()
+        big = b'{"ok": true, "pad": "' + b"x" * MAX_RESPONSE_BYTES + b'"}'
+        self.fake.replies.append((200, big))
+        with self.assertRaises(TransportError) as cm:
+            s.observe()
+        self.assertIn("over {} bytes".format(MAX_RESPONSE_BYTES), str(cm.exception))
+        big_error = b'{"ok": false, "code": "X", "reason": "' + b"x" * MAX_RESPONSE_BYTES + b'"}'
+        self.fake.replies.append((400, big_error))
+        with self.assertRaises(TransportError):
+            s.observe()
+        self.fake.replies.append((200, obs_body(pad="x" * (MAX_RESPONSE_BYTES - 10000))))
+        self.assertEqual(s.observe().step, 3, "a body under the bound still reads")
 
     def test_refused_connection_names_base_url(self):
         sock = socket.socket()

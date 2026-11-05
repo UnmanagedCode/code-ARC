@@ -42,5 +42,9 @@ export function createScriptAccess() {
 
     // Runs opened so far (= notes written in this process).
     runCount: (id) => entries.get(id)?.runs ?? 0,
+
+    // The session ended: drop its token and runs.
+    forget: (id) => { entries.delete(id); },
+    size: () => entries.size,
   };
 }

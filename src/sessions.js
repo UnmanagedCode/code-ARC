@@ -116,10 +116,12 @@ export function createSessions({
   async function end(id, reason, extra = {}) {
     const meta = store.get(id);
     if (!meta || meta.status !== 'live') return meta;
-    const r = rt(id);
-    r.stalled = false;
-    r.inflight = false;
-    const next = await store.update(id, { status: 'ended', end_reason: reason, stalled: false, updated_at: iso(), ...extra });
+    // The in-memory meta is ended as soon as update() is called, so no gate
+    // admits the session again and nothing re-creates the entries pruned here.
+    const saved = store.update(id, { status: 'ended', end_reason: reason, stalled: false, updated_at: iso(), ...extra });
+    runtime.delete(id);
+    access.forget(id);
+    const next = await saved;
     publishSession(next);
     return next;
   }
@@ -140,15 +142,17 @@ export function createSessions({
   }
 
   // Who may touch a live session: a script caller by its token (and, with
-  // `run`, the current run), a tool caller by ownership.
+  // `run`, the current run), a tool caller by ownership. An ended session
+  // refuses before the token is checked: its status and end_reason are public
+  // (GET api/sessions/:id) and its token entry is pruned at the end.
   function admit(id, caller, { run = false } = {}) {
     const meta = store.get(id);
     if (!meta) return { refusal: refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids') };
+    if (meta.status !== 'live') return { refusal: refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason }) };
     const script = caller?.script;
     if (script && !access.verify(id, script.token)) {
-      return { refusal: refuse('TOKEN_INVALID', 'the script token is not valid for this session (missing, wrong, replaced by script_access, or from before a backend restart)') };
+      return { refusal: refuse('TOKEN_INVALID', 'the script token is not valid for this session (missing, wrong, or replaced by script_access)') };
     }
-    if (meta.status !== 'live') return { refusal: refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason }) };
     if (script) {
       const code = run ? access.checkRun(id, script.run) : null;
       if (code) return { refusal: refuse(code, RUN_REFUSALS[code]) };
@@ -176,10 +180,10 @@ export function createSessions({
   // A call that timed out answered late: apply it so history matches the toolkit.
   function lateHandler(id, action, args, tag) {
     return (reply) => {
-      const r = rt(id);
-      r.stalled = false;
       const meta = store.get(id);
+      // Ended meanwhile: its runtime entry is gone; don't re-create it.
       if (!meta || meta.status !== 'live') return;
+      rt(id).stalled = false;
       const done = reply.ok
         ? record(id, action, args, reply.result.obs, tag)
         : reply.code === 'SCORECARD_CLOSED'
@@ -260,6 +264,13 @@ export function createSessions({
 
   return {
     sweep,
+
+    // The script route's gate before its body schema: SESSION_UNKNOWN →
+    // SESSION_ENDED → TOKEN_INVALID. Returns the refusal, or null.
+    admitScript: (id, token) => admit(id, { script: { token } }).refusal || null,
+
+    // Per-session in-memory entries (runtime state, script tokens); test seam.
+    _entryCounts: () => ({ runtime: runtime.size, tokens: access.size() }),
 
     async listGames() {
       const r = await knownGames(true);
@@ -409,10 +420,16 @@ export function createSessions({
     },
 
     // A fresh script token for the owner (the old one stops working and the
-    // current run closes).
+    // current run closes). Stricter than the other tools' collision guard:
+    // rotating kills a running script, so the caller must prove it is the
+    // owner — a known caller id equal to a known owner id.
     scriptAccess({ session_id: id }, caller) {
-      const a = admit(id, caller);
-      if (a.refusal) return a.refusal;
+      const meta = store.get(id);
+      if (!meta) return refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids');
+      if (meta.status !== 'live') return refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason });
+      const owner = meta.owner?.sessionId ?? null;
+      if (owner === null) return refuse('NOT_OWNER', 'this session was started by an unidentified caller, so no caller can prove it owns it and its script token cannot be rotated; keep using the token from start_session, or start a new session');
+      if (typeof caller?.sessionId !== 'string' || caller.sessionId !== owner) return refuse('NOT_OWNER', 'only the agent session that started this game can rotate its script token');
       return { ok: true, session_id: id, script: scriptBlock(id, scriptBase(), access.mint(id)) };
     },
 

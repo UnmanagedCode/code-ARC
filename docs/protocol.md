@@ -1,6 +1,6 @@
 # Protocol
 
-Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, the script HTTP API, SSE events and the sidecar protocol. Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool schemas live in `conductor.plugin.json`.
+Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, SSE events and the sidecar protocol. The script HTTP API and its Python client: [script-api.md](script-api.md). Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool schemas live in `conductor.plugin.json`.
 
 ## MCP tools
 
@@ -15,10 +15,11 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | `observe` | `session_id`, `frame` (`full` default, `none`) | observation from the stored last step; no toolkit call |
 | `end_session` | `session_id` | `{result:{ok, session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?}}` |
 | `list_sessions` | `scope` (`mine` default, `all`) | `{result:{ok, scope, sessions:[…]}}`, newest first, at most `LIST_SESSIONS_MAX` |
-| `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` |
+| `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a string equal to the owner's, so a null caller is refused, and a session whose owner is null can't be rotated by anyone |
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
 - `mine` = sessions whose owner `sessionId` equals the caller's (both `null` counts as equal).
+- Ownership elsewhere is a collision guard: `NOT_OWNER` only when owner and caller `sessionId` are both known and differ. `script_access` is the exception (above).
 
 ### Observation result
 
@@ -38,7 +39,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | `full_reset` | the last reset restarted the whole game |
 | `frame` | `{mode:"full"}`, `{mode:"full", auto_full:true}`, `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null}` or `{mode:"none"}`. `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
 | `online` | online sessions: `{scorecard_url, idle_close_at}` (ISO time) |
-| `script` | `start_session` only: `{base_url, token, client}` (see [Script HTTP API](#script-http-api)); no other observation carries it |
+| `script` | `start_session` only: `{base_url, token, client}` (see [script-api.md](script-api.md)); no other observation carries it |
 
 ### Frame text
 
@@ -75,7 +76,7 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `RATE_LIMITED` | local guard for `ONLINE_RPM_LIMIT` (not sent), or a 429 from arcprize.org | `retry_after_ms` (local guard) |
 | `STEP_RATE_LIMITED` | the session took `STEP_RATE_MAX` steps in the last `STEP_RATE_WINDOW_MS` (`act`/`reset` from tools and scripts, script `attach`/`note`); refused, never delayed, not sent | `retry_after_ms` |
 | `SESSION_STEP_LIMIT` | `act`/`reset` on a session whose step count reached `SESSION_STEPS_MAX`; `end_session` and start a new one | |
-| `TOKEN_INVALID` | script routes: the bearer token is missing, malformed, wrong, replaced by `script_access`, or from before a backend restart (HTTP 401) | |
+| `TOKEN_INVALID` | script routes, live session: the bearer token is missing, malformed, wrong or replaced by `script_access` (HTTP 401). An ended session (also after a backend restart) answers `SESSION_ENDED` before any token check | |
 | `NOTE_REQUIRED` | script `act`/`reset`/`note` with no run open (no attach yet, or `script_access` closed it) | |
 | `RUN_SUPERSEDED` | script `act`/`reset`/`note` naming a run that a newer `attach`/`note` replaced | |
 | `TOO_MANY_NOTES` | script `attach`/`note` past `NOTES_MAX` notes on the session | |
@@ -85,7 +86,7 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 
 ## HTTP API
 
-Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every response carries the headers in `SECURITY_HEADERS` (`src/http.js`). Non-GET routes require `content-type: application/json` (else 415) and a same-origin `Sec-Fetch-Site` (else 403; without that header, any `Origin` is refused). The script routes go further: see [Script HTTP API](#script-http-api).
+Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every response carries the headers in `SECURITY_HEADERS` (`src/http.js`). Non-GET routes require `content-type: application/json` (else 415) and a same-origin `Sec-Fetch-Site` (else 403; without that header, any `Origin` is refused). The script routes go further: see [script-api.md](script-api.md).
 
 | Route | Behaviour |
 |---|---|
@@ -133,59 +134,7 @@ At most `SSE_MAX_CLIENTS` connections: a new one evicts the most backed-up conne
 
 ## Script HTTP API
 
-For an agent's Python script (`clients/code_arc.py`). Same session service as the MCP tools: the same gating, refusal codes, step log and SSE events. Script steps are recorded with `source:"script"` and the run they belong to.
-
-**Where:** `meta.script` from `start_session` (or `script_access`'s result) = `{base_url, token, client}`.
-
-- `base_url` = the backend's own address, `http://127.0.0.1:<port>/api/play/<session_id>/` (not cc's proxy). The port changes only when the plugin restarts, which ends every session anyway.
-- `client` = the absolute path of `clients/code_arc.py` in the plugin checkout.
-- `token` = 32 random bytes, base64url. Kept in backend memory only (as its sha256), valid while the process runs: an ended session refuses it with `SESSION_ENDED` (+ `end_reason`); after a restart it is unknown (`TOKEN_INVALID`). It appears only in `start_session`'s `meta.script` and `script_access`'s result: never in the store, steps, notes, SSE, `api/*` or logs.
-
-**Every request:** `POST <base_url><op>` with
-
-- `content-type: application/json` (else 415);
-- no `Origin` and no `Sec-Fetch-Site` header (else 403 `CROSS_SITE`, "script routes are for non-browser clients"; even the same-origin viewer can't call them);
-- `Authorization: Bearer <token>` (the header only, never the query or body; at most `SCRIPT_AUTH_HEADER_MAX` characters);
-- a body of at most `BODY_MAX_BYTES`, validated against the op's flat schema (unknown keys, wrong types or bounds → `INVALID_ARGUMENT`, before any other check).
-
-A session id that isn't `s-` + 12 hex digits is 404 `SESSION_UNKNOWN`; a well-formed unknown id is the 200 refusal `SESSION_UNKNOWN`.
-
-| op | body | ok result |
-|---|---|---|
-| `attach` | `{note}` (1–`NOTE_MAX_CHARS`, not blank after trimming) | observation + `run` (a new run, which supersedes any other) |
-| `act` | `{run, action, x?, y?, reasoning?}` (same bounds as the `act` tool) | observation + `run` |
-| `reset` | `{run, reasoning?}` | observation + `run` |
-| `note` | `{run, note}` | `{ok:true, run}` (the new run) |
-| `observe` | `{}` | observation (from the stored last step; no toolkit call) |
-
-- **Runs:** a run is the segment opened by one note. `attach` opens run `k`; `note` opens `k+1`. `act`/`reset`/`note` must name the current run: none open → `NOTE_REQUIRED`, an older one → `RUN_SUPERSEDED`. Runs never expire; tool steps in between don't end one. `script_access` closes the current run (run numbers keep counting).
-- **Observation** (200): `{ok:true, session_id, game_id, mode, status, end_reason?, state, levels_completed, win_levels, available_actions:["ACTIONn"…], step, frame_count, full_reset, frame:[hex rows]|null, online?, run?}`: the MCP `meta` fields minus `title` and the frame-text `frame` mode, with the raw rows.
-- **Refusal** (200): `{ok:false, code, reason, …extra}` with the MCP codes. `TOKEN_INVALID` is HTTP 401 with the same body.
-- **Router errors** keep the `{error, code}` shape: 400 `BAD_JSON`, 413 `BODY_TOO_LARGE`, 415, 403 `CROSS_SITE`, 404, 405.
-
-**Gating order:**
-
-- `act`: `SESSION_UNKNOWN` → `TOKEN_INVALID` → `SESSION_ENDED` → `NOTE_REQUIRED` / `RUN_SUPERSEDED` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks.
-- `attach`: `SESSION_UNKNOWN` → `TOKEN_INVALID` → `SESSION_ENDED` → `INVALID_ARGUMENT` (blank note) → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED`. No busy or stalled check (no toolkit call).
-- `note`: as `attach`, with `NOTE_REQUIRED` / `RUN_SUPERSEDED` after `SESSION_ENDED`.
-- `observe`: `SESSION_UNKNOWN` → `TOKEN_INVALID` → `SESSION_ENDED`.
-
-The token replaces ownership: a script call is never `NOT_OWNER`. Tool callers are still owner-checked.
-
-### Python client (`clients/code_arc.py`)
-
-Stdlib only, Python ≥ 3.8; import it from the directory of `meta.script.client`. Usage example in its module docstring.
-
-| Name | Behaviour |
-|---|---|
-| `Session.attach(base_url, token, note, timeout=60)` | POSTs `attach`; keeps `.run`, `.session_id`, `.last` |
-| `.act(action, x=None, y=None, reasoning=None)`, `.reset(reasoning=None)`, `.observe()` | send the current run where needed; return an `Observation` |
-| `.note(text)` | opens the next run; updates and returns `.run` |
-| `Observation` | `.session_id`, `.step`, `.status`, `.end_reason`, `.state`, `.levels_completed`, `.win_levels`, `.available_actions` (list of str), `.frame_count`, `.full_reset`, `.grid` (64×64 `list[list[int]]` or `None`), `.online`, `.raw` |
-| `Refusal` | any `ok:false` body, or a 4xx `{error, code}`: `.code`, `.reason`, `.extra` (dict), `.retry_after_ms` (or `None`) |
-| `TransportError` | unreachable, non-JSON body, or 5xx; the message names `base_url` |
-
-No retries of any kind. HTTP proxies from the environment are bypassed (the backend is local).
+`POST api/play/:id/<op>` and the Python client (`clients/code_arc.py`): see [script-api.md](script-api.md).
 
 ## Sidecar protocol
 

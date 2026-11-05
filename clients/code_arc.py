@@ -10,7 +10,7 @@
 `script` is `meta.script` from start_session (or the result of the
 script_access tool). Every refused call raises `Refusal` with the server's
 code; nothing is retried. `TransportError` means the backend could not be
-reached or answered garbage. Contracts: docs/protocol.md -> Script HTTP API.
+reached or answered garbage. Contracts: docs/script-api.md.
 """
 
 import json
@@ -21,6 +21,8 @@ __all__ = ["Session", "Observation", "Refusal", "TransportError"]
 
 # The backend is always local: never route through an HTTP proxy from env.
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+# Largest response body read; an observation is a few KB.
+MAX_RESPONSE_BYTES = 1 << 20
 
 
 class Refusal(Exception):
@@ -122,13 +124,15 @@ class Session:
         )
         try:
             with _OPENER.open(req, timeout=self.timeout) as resp:
-                status, text = resp.status, resp.read()
+                status, text = resp.status, resp.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as e:
-            status, text = e.code, e.read()
+            status, text = e.code, e.read(MAX_RESPONSE_BYTES + 1)
         except (urllib.error.URLError, OSError) as e:
             raise TransportError(
                 "cannot reach {}: {}. Scripted play needs Bash on cc's host; remote-System workers can't reach it.".format(self.base_url, e)
             ) from None
+        if len(text) > MAX_RESPONSE_BYTES:
+            raise TransportError("{}: HTTP {} with a body over {} bytes".format(url, status, MAX_RESPONSE_BYTES))
         try:
             data = json.loads(text.decode("utf-8"))
         except ValueError:

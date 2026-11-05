@@ -25,7 +25,7 @@
 - Frames come as text (one hex digit per cell with coordinate headers); `act` sends only the changed rows by default, which keeps a typical move to a few lines.
 - `online:true` on `start_session` plays against arcprize.org with a real scorecard (link in the result and the viewer). Rate limits and idle closes are reported as refusals, never retried silently.
 - Only the agent session that started a game can act on or end it; anyone can observe.
-- **Agent scripting:** for sweeps, searches or replaying a route, an agent writes a Python script with the bundled client (`clients/code_arc.py`, path in `start_session`'s `meta.script`). The script attaches with a note, chains actions, branches on results and reads whole frames as ints; its moves go through the same checks and log as tool moves. A lost token is replaced with `script_access`. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). Contracts: [protocol.md → Script HTTP API](protocol.md#script-http-api).
+- **Agent scripting:** for sweeps, searches or replaying a route, an agent writes a Python script with the bundled client (`clients/code_arc.py`, path in `start_session`'s `meta.script`). The script attaches with a note, chains actions, branches on results and reads whole frames as ints; its moves go through the same checks and log as tool moves. A lost token is replaced with `script_access`. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). Contracts: [script-api.md](script-api.md).
 
 ## The `play-arc` skill
 

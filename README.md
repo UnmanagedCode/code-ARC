@@ -6,7 +6,7 @@ A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that 
 - **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, and replay.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
-Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, script HTTP API and client, wire formats) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests).
+Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/script-api.md](docs/script-api.md) (script HTTP API and Python client) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests).
 
 ## Quick start
 
@@ -50,7 +50,7 @@ The backend enforces this: a symlinked `.venv` whose pins differ puts the toolki
 - **Local mode runs game code from arcprize.org.** The toolkit downloads each game's Python source and executes it (its NORMAL-mode design) inside the sidecar process, as your user, with the sidecar's cwd inside the plugin data dir. A hostile game could therefore read anything that process can, **including the API key** the sidecar holds in memory and the files your user can read. For a game you don't trust, start it with `online:true`: ONLINE mode runs the game on arcprize.org and never executes its code locally.
 - **The API key** is stored at `<data dir>/secrets.json` (mode 0600) and shown only masked. The backend sends it to the sidecar over stdin (never env or argv) and redacts it from the logs and tool results it produces; that protects against accidental leaks, not against code running inside the sidecar (above). Changing it requires no live or starting sessions.
 - The backend binds `127.0.0.1` only; every response carries a strict CSP; non-GET routes require same-origin JSON.
-- **Script tokens** (one per session, for `api/play/*`) live only in the backend's memory, as a sha256, and die with the process. They are accepted only in the `Authorization: Bearer` header, compared in constant time, and appear only in `start_session`'s and `script_access`'s results: never on disk, in steps, notes, SSE, `api/*` or logs. Script routes refuse any request carrying `Origin` or `Sec-Fetch-Site`, so a browser page can't drive them.
+- **Script tokens** (one per session, for `api/play/*`) live only in the backend's memory, as a sha256, and die with the process. They are accepted only in the `Authorization: Bearer` header, compared in constant time, and appear only in the `start_session` and `script_access` tool results (themselves `api/mcp` responses): never on disk, in steps, notes, SSE, the viewer's `api/sessions*` routes, other tool results, or logs. Only the agent session that started a game can rotate its token, and a session started by an unidentified caller can't be rotated at all. Script routes refuse any request carrying `Origin` or `Sec-Fetch-Site`, so a browser page can't drive them.
 
 ## Known limitations
 

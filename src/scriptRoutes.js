@@ -1,7 +1,6 @@
-// The script HTTP API (`POST api/play/:id/<op>`, docs/protocol.md → Script
-// HTTP API): the same session service as the MCP tools, reached by a
-// non-browser client with a bearer token. Never logs headers; the token is
-// never in the URL.
+// The script HTTP API (`POST api/play/:id/<op>`, docs/script-api.md): the
+// same session service as the MCP tools, reached by a non-browser client with
+// a bearer token. Never logs headers; the token is never in the URL.
 import { HttpError, readJsonBody, sendJson } from './http.js';
 import { ACTIONS, COORD_MAX, NOTE_MAX_CHARS, REASONING_MAX_CHARS, SCRIPT_AUTH_HEADER_MAX, SESSION_ID_RE } from './limits.js';
 import { observationFields } from './observation.js';
@@ -66,13 +65,14 @@ export function scriptRoutes({ sessions }) {
     ['POST', ROUTE, async (req, res, { params }) => {
       scriptGuard(req);
       if (!SESSION_ID_RE.test(params.id)) throw new HttpError(404, 'SESSION_UNKNOWN', 'no such session');
-      const v = validate(SCHEMAS[params.op], await readJsonBody(req));
-      if (v.error) {
-        sendJson(res, 200, refuse('INVALID_ARGUMENT', v.error));
-        return;
-      }
-      const caller = { script: { token: bearer(req), run: v.args.run } };
-      const out = await ops[params.op](params.id, v.args, caller);
+      const body = await readJsonBody(req);
+      const token = bearer(req);
+      // Session and token gates come before the body schema.
+      const gated = sessions.admitScript(params.id, token);
+      const v = gated ? null : validate(SCHEMAS[params.op], body);
+      const out = gated || (v.error
+        ? refuse('INVALID_ARGUMENT', v.error)
+        : await ops[params.op](params.id, v.args, { script: { token, run: v.args.run } }));
       sendJson(res, out.ok === false && out.code === 'TOKEN_INVALID' ? 401 : 200, out);
     }],
   ];

@@ -12,7 +12,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { writeFileAtomic, readJsonBounded } from './atomicFile.js';
-import { SESSION_ID_RE } from './limits.js';
+import { COORD_MAX, SESSION_ID_RE } from './limits.js';
 
 const META_MAX_BYTES = 64 * 1024;
 // A step line holds one compressed frame (typically well under 1 KB) plus up
@@ -30,13 +30,31 @@ function encodeStep(step) {
   return JSON.stringify({ ...rest, frame_z: deflateRawSync(frame.join('\n')).toString('base64') });
 }
 
-// One stored line back to a step with `frame` rows. Throws on a malformed line.
+// A frame is at most FRAME_SIDE rows of at most FRAME_SIDE palette digits.
+const FRAME_SIDE = COORD_MAX + 1;
+// Longest `rows.join('\n')` of such a frame: the inflate bound.
+const FRAME_TEXT_MAX = FRAME_SIDE * FRAME_SIDE + FRAME_SIDE - 1;
+const FRAME_ROW = new RegExp(`^[0-9a-f]{1,${FRAME_SIDE}}$`);
+const validFrame = (f) => Array.isArray(f) && f.length >= 1 && f.length <= FRAME_SIDE && f.every((r) => typeof r === 'string' && FRAME_ROW.test(r));
+
+function inflateFrame(z) {
+  try {
+    const rows = inflateRawSync(Buffer.from(z, 'base64'), { maxOutputLength: FRAME_TEXT_MAX }).toString('utf8').split('\n');
+    return validFrame(rows) ? rows : null;
+  } catch {
+    return null; // corrupt, or inflates past a frame (a tampered line)
+  }
+}
+
+// One stored line back to a step with `frame` rows. Throws on malformed JSON;
+// a frame that is corrupt, oversized or not hex rows reads as `frame: null`.
 function decodeStep(line) {
   const step = JSON.parse(line);
   if (typeof step.frame_z === 'string') {
     const { frame_z: z, ...rest } = step;
-    return { ...rest, frame: inflateRawSync(Buffer.from(z, 'base64')).toString('utf8').split('\n') };
+    return { ...rest, frame: inflateFrame(z) };
   }
+  if (step.frame !== undefined && step.frame !== null && !validFrame(step.frame)) return { ...step, frame: null };
   return step;
 }
 

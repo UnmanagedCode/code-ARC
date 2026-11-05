@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { deflateRawSync } from 'node:zlib';
 import { freshEnv, json, sendJsonReq, startApp, startGame } from './_helpers.mjs';
 
 test('sessions and steps survive a restart; live sessions end as backend_restart', async (t) => {
@@ -91,4 +92,38 @@ test('notes.jsonl survives a restart', async (t) => {
   const second = await startApp(t, { env });
   const notes = (await json(`${second.url}/api/sessions/${sid}/notes`)).body.notes;
   assert.deepEqual(notes.map((n) => [n.run, n.text, n.from_step]), [[1, 'kept across restarts', 1]]);
+});
+
+test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversized or non-hex frames', async (t) => {
+  const env = await freshEnv(t);
+  const first = await startApp(t, { env });
+  const sid = await startGame(first.mcp);
+  await first.mcp('act', { session_id: sid, action: 'ACTION4' });
+  const good = (await json(`${first.url}/api/sessions/${sid}/steps`)).body.steps;
+  await first.close();
+
+  const file = path.join(env.dataDir, 'sessions', sid, 'steps.jsonl');
+  const z = (text) => deflateRawSync(Buffer.from(text)).toString('base64');
+  const base = { ts: good[1].ts, action: 'ACTION4', source: 'tool', state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1], frame_count: 1, full_reset: false };
+  const tampered = [
+    z('0'.repeat(16 * 1024 * 1024)), // inflates far past a frame
+    z(Array.from({ length: 65 }, () => '5'.repeat(64)).join('\n')), // 65 rows
+    z(Array.from({ length: 64 }, () => '5'.repeat(65)).join('\n')), // 65 columns
+    z(Array.from({ length: 64 }, () => 'zz'.repeat(32)).join('\n')), // not hex
+    'not base64 deflate',
+  ];
+  assert.ok(tampered[0].length < 64 * 1024, 'the bomb line is small on disk');
+  const lines = tampered.map((frameZ, i) => JSON.stringify({ n: 2 + i, ...base, frame_z: frameZ }));
+  lines.push(JSON.stringify({ n: 7, ...base, frame: ['xyz'] })); // a plain frame that is not hex rows
+  await fs.appendFile(file, `${lines.join('\n')}\n`);
+
+  const second = await startApp(t, { env });
+  const steps = (await json(`${second.url}/api/sessions/${sid}/steps`)).body.steps;
+  assert.deepEqual(steps.map((s) => s.n), [0, 1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(steps.slice(0, 2).map((s) => s.frame), good.map((s) => s.frame), 'good lines are untouched');
+  for (const s of steps.slice(2)) assert.equal(s.frame, null, `step ${s.n}`);
+  // The tail is tampered: the session has no last frame, and still observes.
+  const obs = await second.mcp('observe', { session_id: sid });
+  assert.equal(obs.text[0], 'no frame');
+  assert.equal((await json(`${second.url}/api/health`)).status, 200);
 });
