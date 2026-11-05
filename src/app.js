@@ -67,11 +67,9 @@ export async function createApp({
     return meta;
   };
 
-  async function changeKey(res, fn) {
-    if (sessions.liveCount() > 0) throw new HttpError(409, 'SESSIONS_ACTIVE', 'end the live game sessions before changing the API key');
-    await fn();
-    // The next toolkit call respawns the sidecar, which configures the new key.
-    sidecar.stop();
+  async function changeKey(res, apply) {
+    const r = await sessions.changeKey(apply);
+    if (!r.ok) throw new HttpError(409, r.code, r.reason);
     sendJson(res, 200, { apiKey: await keyStore.status() });
   }
 
@@ -116,6 +114,7 @@ export async function createApp({
     mcp,
     async close() {
       sessions.close();
+      await bootstrap.stop();
       sidecar.stop();
       hub.closeAll();
       const closed = new Promise((resolve) => server.close(() => resolve()));

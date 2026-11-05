@@ -2,7 +2,6 @@
 // sweep and live events. Shared by the MCP handlers and the HTTP read routes.
 // Every public method resolves; a refusal is {ok:false, code, reason, ...}.
 import { randomBytes } from 'node:crypto';
-import { DIVERGED_DETAIL, FIX } from './bootstrap.js';
 import { ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, LIST_SESSIONS_MAX, MAX_LIVE_SESSIONS, REASONING_MAX_CHARS } from './limits.js';
 import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT, scorecardUrl } from './online.js';
 
@@ -31,7 +30,12 @@ const lastSummary = (o) => ({ state: o.state, levels_completed: o.levels_complet
 export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: Date.now }, timers = { setInterval, clearInterval }, log = console, idGen = newId, deadlines = DEADLINES, onlineRpmLimit = ONLINE_RPM_LIMIT }) {
   const runtime = new Map(); // id -> {inflight, stalled}
   const limiter = createRateLimiter({ clock, limit: onlineRpmLimit });
+  // Starts in flight count toward the live cap from their check until the
+  // store holds the session; a key change runs only with none live or pending
+  // and blocks starts while it runs. Each check and its reservation happen in
+  // one synchronous block, so no await can interleave them.
   let pendingStarts = 0;
+  let keyChanging = false;
   let gamesCache = null;
 
   const iso = (ms = clock.now()) => new Date(ms).toISOString();
@@ -54,8 +58,8 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
   function toolkitGate() {
     const st = bootstrap.status();
     if (st.state === 'ready') return null;
-    if (st.state === 'diverged') return refuse('DEPS_DIVERGED', 'the shared toolkit venv does not match this checkout\'s requirements.txt', { detail: st.detail || DIVERGED_DETAIL, fix: 'in this worktree: rm .venv, then restart the plugin (or run node scripts/setup.mjs)' });
-    if (st.state === 'failed') return refuse('TOOLKIT_UNAVAILABLE', 'the toolkit could not be installed', { detail: String(st.detail || '').slice(0, DETAIL_MAX), fix: FIX });
+    if (st.state === 'diverged') return refuse('DEPS_DIVERGED', 'the shared toolkit venv does not match this checkout\'s requirements.txt', { detail: st.detail, fix: st.fix });
+    if (st.state === 'failed') return refuse('TOOLKIT_UNAVAILABLE', 'the toolkit could not be installed', { detail: String(st.detail || '').slice(0, DETAIL_MAX), fix: st.fix });
     return refuse('TOOLKIT_NOT_READY', REASONS.TOOLKIT_NOT_READY, { state: st.state, phase: st.phase });
   }
 
@@ -174,7 +178,6 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
   }
 
   return {
-    liveCount,
     sweep,
 
     async listGames() {
@@ -186,51 +189,70 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
       const tk = toolkitGate();
       if (tk) return tk;
       if (typeof gameId !== 'string' || !GAME_ID_RE.test(gameId)) return refuse('INVALID_ARGUMENT', 'game_id is malformed');
+      if (keyChanging) return refuse('TOOLKIT_NOT_READY', 'the API key is being changed; try again shortly', { state: 'reconfiguring' });
       if (liveCount() >= MAX_LIVE_SESSIONS) return refuse('TOO_MANY_SESSIONS', `at most ${MAX_LIVE_SESSIONS} live sessions; end_session one first`, { live: live().map((m) => m.id) });
-      let games = await knownGames(false);
-      if (!games.ok) return games;
-      if (!gameListed(games.games, gameId)) {
-        games = await knownGames(true);
-        if (!games.ok) return games;
-        if (!gameListed(games.games, gameId)) return refuse('GAME_UNKNOWN', REASONS.GAME_UNKNOWN);
-      }
-      const rg = online ? rateGate(null, 2) : null;
-      if (rg) return rg;
-      const id = idGen();
       pendingStarts++;
-      let res;
+      // Released as soon as the store counts the session as live.
+      let pendingReleased = false;
       try {
-        res = await sidecar.call('open', { session_id: id, game_id: gameId, online: Boolean(online) }, {
+        let games = await knownGames(false);
+        if (!games.ok) return games;
+        if (!gameListed(games.games, gameId)) {
+          games = await knownGames(true);
+          if (!games.ok) return games;
+          if (!gameListed(games.games, gameId)) return refuse('GAME_UNKNOWN', REASONS.GAME_UNKNOWN);
+        }
+        const rg = online ? rateGate(null, 2) : null;
+        if (rg) return rg;
+        const id = idGen();
+        const res = await sidecar.call('open', { session_id: id, game_id: gameId, online: Boolean(online) }, {
           timeoutMs: deadlines.open,
           // Opened after we gave up: close it so it doesn't linger.
           onLate: (reply) => { if (reply.ok) sidecar.call('close', { session_id: id }, { timeoutMs: deadlines.close }); },
         });
-      } finally {
+        if (!res.ok) return sidecarRefusal(res);
+        const { scorecard_id: card, title, obs } = res.result;
+        const now = iso();
+        const meta = {
+          id,
+          game_id: res.result.game_id || gameId,
+          title,
+          mode: online ? 'online' : 'local',
+          owner: { sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
+          scorecard_id: card,
+          scorecard_url: online ? scorecardUrl(card) : null,
+          status: 'live',
+          end_reason: null,
+          stalled: false,
+          created_at: now,
+          updated_at: now,
+          last_activity_at: now,
+          step_count: -1,
+          last: lastSummary(obs),
+        };
+        await store.create(meta);
+        rt(id);
         pendingStarts--;
+        pendingReleased = true;
+        return record(id, 'START', {}, obs);
+      } finally {
+        if (!pendingReleased) pendingStarts--;
       }
-      if (!res.ok) return sidecarRefusal(res);
-      const { scorecard_id: card, title, obs } = res.result;
-      const now = iso();
-      const meta = {
-        id,
-        game_id: res.result.game_id || gameId,
-        title,
-        mode: online ? 'online' : 'local',
-        owner: { sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
-        scorecard_id: card,
-        scorecard_url: online ? scorecardUrl(card) : null,
-        status: 'live',
-        end_reason: null,
-        stalled: false,
-        created_at: now,
-        updated_at: now,
-        last_activity_at: now,
-        step_count: -1,
-        last: lastSummary(obs),
-      };
-      await store.create(meta);
-      rt(id);
-      return record(id, 'START', {}, obs);
+    },
+
+    // Runs `apply` (persist the new key) with no live or starting session,
+    // then stops the sidecar so the next spawn configures the new key.
+    // Refuses SESSIONS_ACTIVE otherwise.
+    async changeKey(apply) {
+      if (keyChanging || liveCount() > 0) return refuse('SESSIONS_ACTIVE', 'end the live game sessions before changing the API key');
+      keyChanging = true;
+      try {
+        await apply();
+        sidecar.stop();
+        return { ok: true };
+      } finally {
+        keyChanging = false;
+      }
     },
 
     async act({ session_id: id, action, x, y, reasoning }, caller) {

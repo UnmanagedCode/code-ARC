@@ -21,6 +21,10 @@ Games:
   fake-noisy  step prints to stdout, including a protocol-shaped line.
   fake-429    step fails with HTTP 429.
   fake-closed step fails the way a step on a closed scorecard does.
+
+Keys: one starting `bad-key` is refused by /api/games with 401, one starting
+`offline-` can't reach it. Like the real Arcade.__init__, the failure is only
+logged (with exc_info) and the game list is left empty.
 """
 
 import hashlib
@@ -298,11 +302,23 @@ class Arcade:
             print(f"Got anonymous API key: {key}")
             _module_logger.warning(f"Got anonymous API key: {key}")
         self.arc_api_key = key
+        self._games_error: Optional[str] = None
+        url = f"{arc_base_url}/api/games"
+        if key.startswith("bad-key"):
+            e = _http_error(401, "Unauthorized", "/api/games", '{"error":"UNAUTHORIZED"}')
+            self._games_error = "401"
+        elif key.startswith("offline-"):
+            e = ConnectionError(f"HTTPSConnectionPool(host='three.arcprize.org', port=443): Max retries exceeded with url: /api/games")
+            self._games_error = "offline"
+        if self._games_error:
+            self.logger.error(f"Failed to fetch environments from API ({url}): {e}", exc_info=(type(e), e, None))
         self._cards: dict = {}
         self._closed: set = set()
         self._lock = threading.Lock()
 
     def get_environments(self) -> list:
+        if self._games_error:
+            return []
         return [EnvironmentInfo(gid, title, list(tags), None) for gid, (title, tags) in GAMES.items()]
 
     def create_scorecard(self, source_url: Optional[str] = None, tags: Optional[list] = None, opaque: Any = None) -> str:
@@ -338,6 +354,10 @@ class Arcade:
         renderer: Any = None,
     ) -> Optional[_Wrapper]:
         _record({"op": "make", "game_id": game_id, "scorecard_id": scorecard_id, "save_recording": save_recording})
+        if self._games_error == "401":
+            self.logger.warning("Failed to fetch metadata for game %s (status=%s): %s", game_id, 401, "Unauthorized")
+            self.logger.error(f"Game {game_id} not found in scanned environments. Available games: []")
+            return None
         if game_id not in GAMES:
             self.logger.warning("Failed to fetch metadata for game %s (status=%s): %s", game_id, 404, "Game Not Found")
             return None

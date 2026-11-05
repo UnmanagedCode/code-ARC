@@ -7,13 +7,14 @@
 //   closed.png         an online session whose scorecard was closed
 //   deeplink.png       ?session=&step= routing
 //   dark.png           OS dark theme (standalone fallback tokens)
+//   banner.png         toolkit banner for a diverged venv, with its fix
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
-import { bootArc, mcp } from './boot.mjs';
+import { bootArc, bootDiverged, mcp } from './boot.mjs';
 
 const { withPage } = await import(BROWSER);
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
@@ -119,6 +120,19 @@ try {
   }, { viewport: { width: 1280, height: 900 } });
 } finally {
   await srv.close();
+}
+
+const diverged = await bootDiverged();
+try {
+  await withPage(async (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    await page.goto(diverged.url);
+    await page.locator('#toolkit-banner:not([hidden])').waitFor();
+    await page.getByText(/^Fix: in this worktree: `rm \.venv`/).waitFor();
+    await page.screenshot({ path: path.join(OUT, 'banner.png') });
+  }, { viewport: { width: 1100, height: 420 } });
+} finally {
+  await diverged.close();
 }
 
 if (problems.length) {

@@ -21,8 +21,10 @@ const TAIL_CHARS = 4000;
 
 export const DEFAULT_TIMEOUTS = Object.freeze({ probe: 10000, venv: 120000, download: 60000, install: 600000, smoke: 60000 });
 
+// The `fix` shown with a failed or diverged state (status, refusals, banner).
 export const FIX = 'see the detail; then restart the plugin, or run `node scripts/setup.mjs` in the plugin checkout';
-export const DIVERGED_DETAIL = "this worktree's requirements.txt differs from the shared venv; run `rm .venv` (removes only this worktree's symlink) then restart the plugin, or `node scripts/setup.mjs`";
+export const DIVERGED_FIX = 'in this worktree: `rm .venv` (removes only this worktree\'s symlink), then restart the plugin or run `node scripts/setup.mjs`';
+export const DIVERGED_DETAIL = "this worktree's requirements.txt differs from the shared venv the .venv symlink points to";
 
 class BootstrapError extends Error {
   constructor(code, message) {
@@ -60,18 +62,36 @@ export function createBootstrap({
   const venv = path.join(checkoutDir, '.venv');
   const venvPython = path.join(venv, 'bin', 'python');
   const stampFile = path.join(venv, 'code-arc-stamp.json');
-  let status = { state: 'checking', phase: 'stamp', detail: null, python: null, code: null };
+  let status = { state: 'checking', phase: 'stamp', detail: null, fix: null, python: null, code: null };
   let running = null;
+  // stop(): no new children, live ones killed, the download aborted, and no
+  // further state change except `stopped`.
+  let stopped = false;
+  const children = new Set();
+  const abort = new AbortController();
 
   function set(next) {
+    if (stopped && next.state !== 'stopped') return;
     status = { ...status, ...next };
     onChange(status);
+  }
+
+  function killGroup(child) {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+  }
+
+  function checkStopped() {
+    if (stopped) throw new BootstrapError('STOPPED', 'bootstrap stopped');
   }
 
   // Runs a command to completion with a deadline; on timeout kills its process group.
   function run(cmd, args, { timeoutMs, stream = false, cwd = checkoutDir } = {}) {
     return new Promise((resolve) => {
       const tail = createTail();
+      if (stopped) {
+        resolve({ code: null, error: new Error('bootstrap stopped'), tail: '' });
+        return;
+      }
       let child;
       try {
         child = spawn(cmd, args, { cwd, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -79,10 +99,11 @@ export function createBootstrap({
         resolve({ code: null, error: e, tail: '' });
         return;
       }
+      children.add(child);
       let timedOut = false;
       const timer = setTimeout(() => {
         timedOut = true;
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); }
+        killGroup(child);
       }, timeoutMs);
       timer.unref?.();
       const onData = (d) => {
@@ -94,10 +115,12 @@ export function createBootstrap({
       child.stderr?.on('data', onData);
       child.on('error', (e) => {
         clearTimeout(timer);
+        children.delete(child);
         resolve({ code: null, error: e, tail: tail.text() });
       });
       child.on('close', (code) => {
         clearTimeout(timer);
+        children.delete(child);
         resolve({ code, timedOut, tail: tail.text() });
       });
     });
@@ -114,6 +137,7 @@ export function createBootstrap({
   async function findPython() {
     for (const cand of PYTHON_CANDIDATES) {
       const r = await run(cand, ['--version'], { timeoutMs: timeouts.probe });
+      checkStopped();
       const m = r.code === 0 && /Python (\d+)\.(\d+)\.(\d+)/.exec(r.tail);
       if (!m) continue;
       const [maj, min] = [Number(m[1]), Number(m[2])];
@@ -125,8 +149,9 @@ export function createBootstrap({
   async function download(dest) {
     let res;
     try {
-      res = await fetch(pip.url, { signal: AbortSignal.timeout(timeouts.download) });
+      res = await fetch(pip.url, { signal: AbortSignal.any([AbortSignal.timeout(timeouts.download), abort.signal]) });
     } catch (e) {
+      checkStopped();
       throw new BootstrapError('DOWNLOAD_FAILED', `could not fetch ${pip.url}: ${e.message}`);
     }
     if (!res.ok) throw new BootstrapError('DOWNLOAD_FAILED', `${pip.url} answered ${res.status}`);
@@ -140,6 +165,7 @@ export function createBootstrap({
       }
     } catch (e) {
       if (e instanceof BootstrapError) throw e;
+      checkStopped();
       throw new BootstrapError('DOWNLOAD_FAILED', `reading ${pip.url} failed: ${e.message}`);
     }
     const buf = Buffer.concat(chunks);
@@ -151,6 +177,7 @@ export function createBootstrap({
   async function step(phase, cmd, args, timeoutMs, code) {
     set({ state: 'installing', phase });
     const r = await run(cmd, args, { timeoutMs, stream: true });
+    checkStopped();
     if (r.code !== 0) {
       const why = r.timedOut ? `timed out after ${timeoutMs} ms` : r.error ? r.error.message : `exited ${r.code}`;
       throw new BootstrapError(code, `${phase} ${why}: ${r.tail.slice(-DETAIL_MAX)}`);
@@ -175,7 +202,7 @@ export function createBootstrap({
       return;
     }
     if (st && st.isSymbolicLink()) {
-      set({ state: 'diverged', phase: 'stamp', code: 'DEPS_DIVERGED', detail: DIVERGED_DETAIL });
+      set({ state: 'diverged', phase: 'stamp', code: 'DEPS_DIVERGED', detail: DIVERGED_DETAIL, fix: DIVERGED_FIX });
       return;
     }
     set({ state: 'installing', phase: 'python' });
@@ -184,7 +211,7 @@ export function createBootstrap({
     try {
       const again = await fs.lstat(venv);
       if (again.isSymbolicLink()) {
-        set({ state: 'diverged', phase: 'stamp', code: 'DEPS_DIVERGED', detail: DIVERGED_DETAIL });
+        set({ state: 'diverged', phase: 'stamp', code: 'DEPS_DIVERGED', detail: DIVERGED_DETAIL, fix: DIVERGED_FIX });
         return;
       }
       if (again.isDirectory()) await fs.rm(venv, { recursive: true, force: true });
@@ -197,6 +224,7 @@ export function createBootstrap({
     await download(pyz);
     await step('install', venvPython, [pyz, 'install', '--disable-pip-version-check', '--no-input', '-r', path.join(checkoutDir, 'requirements.txt')], timeouts.install, 'INSTALL_FAILED');
     await step('smoke', venvPython, ['-I', '-c', 'import arc_agi, arcengine'], timeouts.smoke, 'SMOKE_FAILED');
+    checkStopped();
     // Written last: its presence means the venv is complete.
     await fs.writeFile(stampFile, JSON.stringify({ requirements_sha256: reqSha, python_version: py.version }));
     set({ state: 'ready', phase: null, python: venvPython, detail: null, code: null });
@@ -208,10 +236,23 @@ export function createBootstrap({
     run() {
       if (!running) {
         running = bootstrap().catch((e) => {
+          if (stopped) return;
           const detail = String(e.message || e).slice(-DETAIL_MAX);
           log.error(`[code-arc bootstrap] failed (${e.code || 'ERROR'}): ${detail}`);
-          set({ state: 'failed', code: e.code || 'BOOTSTRAP_FAILED', detail });
+          set({ state: 'failed', code: e.code || 'BOOTSTRAP_FAILED', detail, fix: FIX });
         });
+      }
+      return running;
+    },
+    // Kills any running install step's process group and settles run() as
+    // `stopped` (a later start reruns the bootstrap from its stamp check).
+    async stop() {
+      if (stopped) return running;
+      stopped = true;
+      abort.abort();
+      for (const child of children) killGroup(child);
+      if (status.state === 'checking' || status.state === 'installing') {
+        set({ state: 'stopped', phase: null, code: null, fix: null, detail: 'bootstrap stopped; it reruns on the next start' });
       }
       return running;
     },

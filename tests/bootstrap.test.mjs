@@ -5,7 +5,8 @@ import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
 import { existsSync, promises as fs } from 'node:fs';
 import path from 'node:path';
-import { createBootstrap } from '../src/bootstrap.js';
+import { spawn as nodeSpawn } from 'node:child_process';
+import { createBootstrap, DIVERGED_FIX, FIX } from '../src/bootstrap.js';
 import { captureLog, freshEnv, json, startApp, until } from './_helpers.mjs';
 
 const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
@@ -83,7 +84,8 @@ test('a symlinked venv whose stamp differs is diverged and never written through
   await b.run();
   const s = b.status();
   assert.equal(s.state, 'diverged');
-  assert.match(s.detail, /rm \.venv/);
+  assert.equal(s.fix, DIVERGED_FIX);
+  assert.match(s.fix, /rm \.venv/);
   assert.equal(b.python(), null);
   assert.equal(calls.length, 0);
   assert.deepEqual((await fs.readdir(shared)).sort(), ['code-arc-stamp.json', 'marker']);
@@ -97,6 +99,7 @@ test('no Python >= 3.12 fails with PYTHON_MISSING', async (t) => {
   await b.run();
   assert.equal(b.status().state, 'failed');
   assert.equal(b.status().code, 'PYTHON_MISSING');
+  assert.equal(b.status().fix, FIX);
 });
 
 function installer(dir, { install = { code: 0 }, onSmoke = () => {} } = {}) {
@@ -185,4 +188,51 @@ test('failed and diverged installs refuse with detail and a fix', async (t) => {
   const dr = await (async () => { for (;;) { const r = (await b.mcp('list_games')).result; if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
   assert.equal(dr.code, 'DEPS_DIVERGED');
   assert.match(dr.fix, /rm \.venv/);
+});
+
+// A real detached child that never exits on its own, standing in for pip.
+function hangingSpawn() {
+  const pids = [];
+  const spawn = (cmd, args, opts) => {
+    const c = nodeSpawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], opts);
+    pids.push(c.pid);
+    return c;
+  };
+  return { spawn, pids };
+}
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+
+test('stop() kills a running install step and settles run() as stopped', async (t) => {
+  const { dir } = await checkout(t);
+  const { spawn, pids } = hangingSpawn();
+  const b = createBootstrap({ checkoutDir: dir, spawn, fetch: noFetch, log: quiet });
+  const running = b.run();
+  await until(() => pids.length === 1 && b.status().phase === 'python');
+  assert.ok(alive(pids[0]));
+  await b.stop();
+  await running;
+  assert.equal(b.status().state, 'stopped');
+  await until(() => !alive(pids[0]));
+  assert.equal(pids.length, 1, 'no further step started after stop');
+  assert.ok(!existsSync(path.join(dir, '.venv', 'code-arc-stamp.json')));
+});
+
+test('app.close() leaves no bootstrap child behind', async (t) => {
+  const { env, dir } = await checkout(t);
+  const { spawn, pids } = hangingSpawn();
+  const { app, close } = await startApp(t, { env, config: { checkoutDir: dir, python: null }, spawn });
+  await until(() => pids.length === 1);
+  await close();
+  assert.equal(app.bootstrap.status().state, 'stopped');
+  await until(() => !alive(pids[0]));
+});
+
+test('failed and diverged states carry their fix in api/status', async (t) => {
+  const div = await checkout(t);
+  const shared = path.join(div.env.tmp, 'shared');
+  await fs.mkdir(shared);
+  await fs.symlink(shared, path.join(div.dir, '.venv'));
+  const { url } = await startApp(t, { env: div.env, config: { checkoutDir: div.dir, python: null }, spawn: fakeSpawn(() => ({ code: 0 })).spawn });
+  const tk = await until(async () => { const b = (await json(`${url}/api/status`)).body.toolkit; return b.state === 'diverged' && b; });
+  assert.equal(tk.fix, DIVERGED_FIX);
 });

@@ -72,3 +72,45 @@ test('non-GET routes require same-origin JSON', async (t) => {
   assert.equal(same.status, 200);
   assert.equal((await json(`${url}/api/settings`)).body.apiKey.set, true);
 });
+
+test('a key change cannot interleave with a start', async (t) => {
+  const { app, mcp } = await startApp(t);
+  // A start already in flight holds its reservation: the key change is refused,
+  // and the session it creates stays playable (its sidecar was not stopped).
+  const starting = mcp('start_session', { game_id: 'fake-maze' });
+  let applied = false;
+  const change = await app.sessions.changeKey(async () => { applied = true; });
+  assert.equal(change.code, 'SESSIONS_ACTIVE');
+  assert.equal(applied, false);
+  const sid = (await starting).meta.session_id;
+  assert.ok((await mcp('act', { session_id: sid, action: 'ACTION1' })).meta);
+  await mcp('end_session', { session_id: sid });
+
+  // A key change in progress blocks starts until it finishes.
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const changing = app.sessions.changeKey(() => gate);
+  const blocked = (await mcp('start_session', { game_id: 'fake-maze' })).result;
+  assert.equal(blocked.code, 'TOOLKIT_NOT_READY');
+  assert.equal(blocked.state, 'reconfiguring');
+  release();
+  assert.deepEqual(await changing, { ok: true });
+  assert.ok((await mcp('start_session', { game_id: 'fake-maze' })).meta);
+});
+
+test('a refused key or unreachable API is a refusal, not an empty game list', async (t) => {
+  const { url, mcp, log } = await startApp(t);
+  const bad = 'bad-key-0123456789abcdef';
+  assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: bad })).status, 200);
+  const r = (await mcp('list_games')).result;
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'TOOLKIT_ERROR');
+  assert.match(r.detail, /rejected the API key \(HTTP 401\)/);
+  assert.ok(!r.detail.includes(bad));
+  const s = (await mcp('start_session', { game_id: 'fake-maze' })).result;
+  assert.equal(s.code, 'TOOLKIT_ERROR', 'not GAME_UNKNOWN');
+  assert.ok(!log.text().includes(bad));
+
+  assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'offline-0123456789abcdef' })).status, 200);
+  assert.equal((await mcp('list_games')).result.code, 'NETWORK_ERROR');
+});

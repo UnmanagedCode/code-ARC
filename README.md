@@ -45,8 +45,8 @@ The backend enforces this: a symlinked `.venv` whose pins differ puts the toolki
 
 ## Security notes
 
-- **Local mode runs game code from arcprize.org.** The toolkit downloads each game's Python source and executes it (its NORMAL mode design). It runs in the separate sidecar process, as your user, with the sidecar's cwd inside the plugin data dir.
-- **The API key** is stored at `<data dir>/secrets.json` (mode 0600), shown only masked, sent to the sidecar over stdin only, and redacted from every log line and tool result. Changing it requires no live sessions.
+- **Local mode runs game code from arcprize.org.** The toolkit downloads each game's Python source and executes it (its NORMAL-mode design) inside the sidecar process, as your user, with the sidecar's cwd inside the plugin data dir. A hostile game could therefore read anything that process can, **including the API key** the sidecar holds in memory and the files your user can read. For a game you don't trust, start it with `online:true`: ONLINE mode runs the game on arcprize.org and never executes its code locally.
+- **The API key** is stored at `<data dir>/secrets.json` (mode 0600) and shown only masked. The backend sends it to the sidecar over stdin (never env or argv) and redacts it from the logs and tool results it produces; that protects against accidental leaks, not against code running inside the sidecar (above). Changing it requires no live or starting sessions.
 - The backend binds `127.0.0.1` only; every response carries a strict CSP; non-GET routes require same-origin JSON.
 
 ## Known limitations
@@ -56,4 +56,5 @@ The backend enforces this: a symlinked `.venv` whose pins differ puts the toolki
 - `requirements.txt` pins versions but not hashes (wheels are platform-specific).
 - Live sessions end when the backend restarts (toolkit environments are in-process).
 - Online sessions need network, are rate-limited, and their scorecards auto-close after idling; arcprize.org's server-side reasoning bound is checked conservatively.
+- **DNS rebinding is not blocked** (inherited from code-conductor's posture). The backend accepts any `Host` header: cc's plugin proxy forwards the browser's `Host` (localhost, LAN address, remote or tunnel name), so an allowlist would break the view for those users, and code-conductor itself documents DNS rebinding as a known, out-of-scope limitation of its own `/api` (its `docs/protocol.md` → WebSocket protocol → Handshake: Origin check), which a rebinding page could use to reach far more than this plugin. The same-origin JSON, `Sec-Fetch-Site` and `Origin` guards stay.
 - The viewer loads at most the newest `VIEWER_STEPS_MAX` steps of a session (`frontend/app.js`).

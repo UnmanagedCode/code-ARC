@@ -115,10 +115,33 @@ def _exceptions(exc: Optional[BaseException], records: list) -> list:
     return out
 
 
+AUTH_HINT = (
+    "arcprize.org rejected the API key (HTTP {status}): check it in Code ARC Settings, "
+    "or clear it to use the toolkit's anonymous key. "
+)
+
+
+def auth_status(records: list, exc: Optional[BaseException] = None) -> Optional[int]:
+    """401/403 when arcprize.org refused the key, from an exception's HTTP
+    status or the toolkit's `(status=401)` / `401 Client Error` log text."""
+    for e in _exceptions(exc, records):
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status in (401, 403):
+            return status
+    for r in records:
+        m = re.search(r"\(status=(40[13])\)|\b(40[13]) Client Error", r.getMessage()[:SCAN_MAX])
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
 def classify_failure(op: str, records: list, exc: Optional[BaseException] = None) -> str:
     """Map a failed toolkit call to a refusal code, from the exception it raised
     or the records it logged. Patterns match the live service (see the wiki's
-    failure-classification page)."""
+    failure-classification page). A refused key is TOOLKIT_ERROR; its detail
+    names the key (see _detail)."""
+    if auth_status(records, exc) is not None:
+        return "TOOLKIT_ERROR"
     for e in _exceptions(exc, records):
         resp = getattr(e, "response", None)
         status = getattr(resp, "status_code", None)
@@ -150,7 +173,9 @@ def _detail(records: list, exc: Optional[BaseException], fallback: str) -> str:
     parts = [r.getMessage() for r in records if r.levelno >= logging.WARNING]
     if exc is not None:
         parts.append(f"{type(exc).__name__}: {exc}")
-    return (" | ".join(parts) or fallback)[:DETAIL_MAX]
+    status = auth_status(records, exc)
+    hint = AUTH_HINT.format(status=status) if status is not None else ""
+    return (hint + (" | ".join(parts) or fallback))[:DETAIL_MAX]
 
 
 def _cap(s: Any, n: int) -> str:
@@ -230,12 +255,12 @@ class Engine:
 
         return arc_agi, arcengine
 
-    def _arcade(self, online: bool, refresh: bool = False) -> Any:
+    def _arcade(self, online: bool) -> Any:
         arc_agi, _ = self._toolkit()
         mode = "online" if online else "normal"
         with self._arcade_lock:
             arcade = self._arcades.get(mode)
-            if arcade is None or refresh:
+            if arcade is None:
                 op_mode = arc_agi.OperationMode.ONLINE if online else arc_agi.OperationMode.NORMAL
                 arcade = arc_agi.Arcade(arc_api_key=self.api_key or "", operation_mode=op_mode, logger=self.log)
                 self.redactor.add(getattr(arcade, "arc_api_key", None))
@@ -277,14 +302,20 @@ class Engine:
 
     def list_games(self) -> dict:
         def run() -> list:
-            arcade = self._arcade(False)
-            envs = arcade.get_environments()
-            if not envs:
-                # The list is fetched once at construction; retry a transient miss.
-                envs = self._arcade(False, refresh=True).get_environments()
-            return envs
+            with self._arcade_lock:
+                cached = self._arcades.get("normal")
+                # The toolkit fetches the list once, at construction: an
+                # arcade holding an empty list is rebuilt (once) rather than reused.
+                if cached is not None and not cached.get_environments():
+                    del self._arcades["normal"]
+            return self._arcade(False).get_environments()
 
-        envs, _ = self._call("list_games", run)
+        envs, records = self._call("list_games", run)
+        if not envs and any(r.levelno >= logging.WARNING for r in records):
+            # Arcade() catches a failed /api/games fetch and only logs it.
+            with self._arcade_lock:
+                self._arcades.pop("normal", None)
+            raise self._fail("list_games", records, "the toolkit could not list games")
         games = []
         for e in envs:
             gid = str(getattr(e, "game_id", "") or "")

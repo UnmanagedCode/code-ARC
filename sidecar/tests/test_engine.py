@@ -174,6 +174,48 @@ class EngineOpsTest(unittest.TestCase):
         self.assertNotIn("secret-key-123456", log.getvalue())
 
 
+class ListGamesFailureTest(unittest.TestCase):
+    def setUp(self):
+        self.cwd = TempCwd()
+        self.cwd.__enter__()
+
+    def tearDown(self):
+        self.cwd.__exit__(None, None, None)
+
+    def test_refused_key_fails_and_names_the_key(self):
+        engine, _ = make_engine("bad-key-0123456789")
+        with self.assertRaises(Refusal) as cm:
+            engine.list_games()
+        self.assertEqual(cm.exception.code, "TOOLKIT_ERROR")
+        self.assertIn("rejected the API key (HTTP 401)", cm.exception.detail)
+        self.assertNotIn("bad-key-0123456789", cm.exception.detail)
+        # One Arcade per call: no duplicate construction on the failing path.
+        self.assertEqual(len([c for c in calls() if c["op"] == "Arcade"]), 1)
+        # The failed arcade isn't cached: the next call retries.
+        with self.assertRaises(Refusal):
+            engine.list_games()
+        self.assertEqual(len([c for c in calls() if c["op"] == "Arcade"]), 2)
+
+    def test_unreachable_api_is_network_error(self):
+        engine, _ = make_engine("offline-0123456789")
+        with self.assertRaises(Refusal) as cm:
+            engine.list_games()
+        self.assertEqual(cm.exception.code, "NETWORK_ERROR")
+
+    def test_refused_key_on_open_is_not_game_unknown(self):
+        engine, _ = make_engine("bad-key-0123456789")
+        with self.assertRaises(Refusal) as cm:
+            engine.open(SID, "fake-maze", False)
+        self.assertEqual(cm.exception.code, "TOOLKIT_ERROR")
+        self.assertIn("API key", cm.exception.detail)
+
+    def test_good_key_lists_games_with_one_arcade(self):
+        engine, _ = make_engine("good-key-0123456789")
+        self.assertTrue(engine.list_games()["games"])
+        engine.list_games()
+        self.assertEqual(len([c for c in calls() if c["op"] == "Arcade"]), 1)
+
+
 class ClassifyTest(unittest.TestCase):
     def test_mapping(self):
         e429 = arc_agi.HTTPError("429 Client Error", response=arc_agi._Response(429, ""))
@@ -189,6 +231,8 @@ class ClassifyTest(unittest.TestCase):
             ("open", [rec("Failed to fetch metadata for game zz (status=404): Game Not Found", level=logging.WARNING)], None, "GAME_UNKNOWN"),
             ("open", [rec("Game zz not found in scanned environments. Available games: []")], None, "GAME_UNKNOWN"),
             ("step", [rec("Error performing step with action ACTION1: boom")], None, "TOOLKIT_ERROR"),
+            ("list_games", [rec("x", arc_agi.HTTPError("401 Client Error", response=arc_agi._Response(401, "")))], None, "TOOLKIT_ERROR"),
+            ("open", [rec("Failed to fetch metadata for game g (status=403): no", level=logging.WARNING), rec("Game g not found in scanned environments.")], None, "TOOLKIT_ERROR"),
         ]
         for op, records, exc, want in cases:
             with self.subTest(want=want, op=op):

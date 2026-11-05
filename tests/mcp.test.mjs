@@ -176,3 +176,14 @@ test('malformed envelopes and unknown tools are {error}', async (t) => {
   assert.ok((await app.mcp.handle(null)).error);
   assert.ok((await app.mcp.handle({ tool: 'toString', arguments: {} })).error);
 });
+
+test(`a burst of concurrent starts admits exactly ${MAX_LIVE_SESSIONS}`, async (t) => {
+  const { mcp, app } = await startApp(t);
+  const n = MAX_LIVE_SESSIONS + 6;
+  const results = await Promise.all(Array.from({ length: n }, () => mcp('start_session', { game_id: 'fake-maze' })));
+  const started = results.filter((r) => r.meta);
+  const refused = results.filter((r) => r.result?.code === 'TOO_MANY_SESSIONS');
+  assert.equal(started.length, MAX_LIVE_SESSIONS);
+  assert.equal(refused.length, n - MAX_LIVE_SESSIONS);
+  assert.equal(app.store.list().filter((m) => m.status === 'live').length, MAX_LIVE_SESSIONS);
+});

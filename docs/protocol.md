@@ -8,7 +8,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 | Tool | Arguments | Returns |
 |---|---|---|
-| `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded}]}}` |
+| `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded}]}}`; a failed game-list fetch is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
 | `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`) | observation, first frame full |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default) | observation |
@@ -63,11 +63,11 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it | |
 | `ACTION_UNAVAILABLE` | action not in `available_actions` | `available_actions` |
 | `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER` | `state` |
-| `TOOLKIT_NOT_READY` | venv still being checked/installed | `state`, `phase` |
+| `TOOLKIT_NOT_READY` | venv still being checked/installed (or stopped); or, for `start_session`, an API key change in progress (`state:"reconfiguring"`) | `state`, `phase` |
 | `TOOLKIT_UNAVAILABLE` | venv install failed | `detail` (≤ `DETAIL_MAX`), `fix` |
 | `DEPS_DIVERGED` | worktree's symlinked `.venv` doesn't match its `requirements.txt` | `detail`, `fix` |
 | `TOOLKIT_TIMEOUT` | no answer within the op's `DEADLINES` entry; the session becomes stalled | `detail` |
-| `TOOLKIT_ERROR` | any other toolkit failure | `detail` |
+| `TOOLKIT_ERROR` | any other toolkit failure; arcprize.org refusing the API key (401/403) is this code with a detail that says so | `detail` |
 | `SIDECAR_EXITED` | the sidecar died; live sessions end with `sidecar_exit` | `detail` (redacted stderr tail) |
 | `NETWORK_ERROR` | timeout / connection failure reaching arcprize.org | `detail` |
 | `RATE_LIMITED` | local guard for `ONLINE_RPM_LIMIT` (not sent), or a 429 from arcprize.org | `retry_after_ms` (local guard) |
@@ -82,13 +82,13 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | Route | Behaviour |
 |---|---|
 | `GET api/health` | `{ok:true}`; independent of the toolkit (`healthPath`) |
-| `GET api/status` | `{toolkit:{state, phase, detail, python, code}, sidecar:{running, versions}}`; toolkit `state` ∈ `checking`, `installing`, `ready`, `failed`, `diverged` |
+| `GET api/status` | `{toolkit:{state, phase, detail, fix, python, code}, sidecar:{running, versions}}`; toolkit `state` ∈ `checking`, `installing`, `ready`, `failed`, `diverged`, `stopped`; `fix` is set for `failed` and `diverged` |
 | `GET api/sessions` | `{sessions:[meta…]}`, newest first |
 | `GET api/sessions/:id` | meta; 404 `SESSION_UNKNOWN` |
 | `GET api/sessions/:id/steps?from&limit` | `{steps:[…]}` with `n ≥ from`, at most `STEPS_PAGE_MAX` |
 | `GET api/events` | SSE (below) |
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
-| `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` |
+| `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting, or another key change runs |
 | `DELETE api/settings/api-key` | clears → `{apiKey}`; 409 `SESSIONS_ACTIVE` |
 | `POST api/mcp` | the MCP endpoint |
 
@@ -111,7 +111,7 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 | `session` | one session meta (create/update) |
 | `step` | `{session_id, step}` |
 
-Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
+At most `SSE_MAX_CLIENTS` connections (more get 503 with `retry-after`); a client leaving more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
 
 ## Sidecar protocol
 

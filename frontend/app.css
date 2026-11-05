@@ -87,6 +87,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 }
 .banner[data-state="failed"], .banner[data-state="diverged"] { border-color: var(--destructive); }
 .banner-detail { white-space: pre-wrap; word-break: break-word; margin: 0.35rem 0 0; font-size: 0.8rem; }
+.banner-fix { margin: 0.35rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
 
 .settings { margin-bottom: 0.75rem; }
 .settings label { display: block; margin-bottom: 0.25rem; }

@@ -22,3 +22,19 @@ export async function mcp(url, tool, args = {}, caller = { sessionId: 'demo-sess
   const res = await fetch(`${url}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool, arguments: args, caller }) });
   return res.json();
 }
+
+// Boots a throwaway copy of the backend whose .venv is a symlink to an empty
+// dir: the toolkit reports `diverged`, so the banner (detail + fix) shows.
+export async function bootDiverged() {
+  const { cp, mkdtemp, mkdir, rm, symlink } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const tmp = await mkdtemp(path.join(os.tmpdir(), 'code-arc-diverged-'));
+  const copy = path.join(tmp, 'checkout');
+  for (const p of ['server.js', 'package.json', 'requirements.txt', 'conductor.plugin.json', 'src', 'frontend', 'sidecar']) {
+    await cp(path.join(REPO, p), path.join(copy, p), { recursive: true });
+  }
+  await mkdir(path.join(tmp, 'shared-venv'));
+  await symlink(path.join(tmp, 'shared-venv'), path.join(copy, '.venv'));
+  const srv = await bootServer({ cwd: copy, entry: 'server.js', silent: true, sandbox: { dirs: { CONDUCTOR_PLUGIN_DATA_DIR: 'data' } } });
+  return { ...srv, async close() { await srv.close(); await rm(tmp, { recursive: true, force: true }); } };
+}

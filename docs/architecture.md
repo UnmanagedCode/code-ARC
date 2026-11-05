@@ -35,13 +35,15 @@ cc proxy ─/plugins/code-arc/─▶ same backend: frontend/, api/*, SSE
 - **First toolkit call:** `sidecar.call()` spawns `<python> -I -u sidecar/arc_sidecar.py` in its own process group, cwd `<data>/toolkit/`, with an env allowlist (`ENV_ALLOWLIST` in `src/sidecar.js`); waits for `ready`, then sends `configure` with the key from `keyStore`.
 - **Each call** has a deadline from `DEADLINES`. On timeout the session is marked `stalled`; the eventual reply is applied (`lateHandler` in `src/sessions.js`) and un-stalls it.
 - **Sidecar exit** (crash, oversized line): pending calls resolve `SIDECAR_EXITED`, live sessions end with `sidecar_exit`, the next call respawns. A deliberate `sidecar.stop()` (key change, shutdown) ends no sessions.
-- **Key change:** refused with live sessions; otherwise the key is written and the sidecar stopped, so the next spawn configures the new key.
+- **Starts and key changes share one in-process gate** (`start` / `changeKey` in `src/sessions.js`). A start checks the live cap and reserves a slot in one synchronous block, and holds the reservation until the store has the session. A key change runs only with nothing live or starting, and blocks starts (`TOOLKIT_NOT_READY`, `state:"reconfiguring"`) while it writes the key and stops the sidecar, so the next spawn configures the new key.
+- **Shutdown:** `app.close()` stops the sweep, the bootstrap (`bootstrap.stop()` kills a running venv/pip step's process group and settles the bootstrap as `stopped`), the sidecar and the SSE clients.
+- **Live events are bounded:** at most `SSE_MAX_CLIENTS` connections; a client leaving more than `SSE_MAX_BUFFERED_BYTES` unsent is dropped (its EventSource reconnects and resumes from the replay ring).
 - **Online idle sweep:** every `SWEEP_MS` (`src/sessions.js`, injected timers), a live online session idle for `ONLINE_IDLE_CLOSE_MS` ends with `scorecard_auto_closed` and is dropped from the sidecar.
 
 ## The venv bootstrap (`src/bootstrap.js`)
 
 - `.venv/code-arc-stamp.json` = `{requirements_sha256, python_version}`, written **last**; a matching stamp means ready.
-- States: `checking` → `installing` (phases `python`, `venv`, `download`, `install`, `smoke`) → `ready`; or `failed` (`code`: `PYTHON_MISSING`, `DOWNLOAD_FAILED`, `HASH_MISMATCH`, `VENV_FAILED`, `INSTALL_FAILED`, `SMOKE_FAILED`) or `diverged`.
+- States: `checking` → `installing` (phases `python`, `venv`, `download`, `install`, `smoke`) → `ready`; or `failed` (`code`: `PYTHON_MISSING`, `DOWNLOAD_FAILED`, `HASH_MISMATCH`, `VENV_FAILED`, `INSTALL_FAILED`, `SMOKE_FAILED`) or `diverged`, each with a `fix` (`FIX`, `DIVERGED_FIX`) carried in the status, the refusals and the viewer banner; or `stopped` (shutdown mid-install).
 - Steps: find a Python of at least `MIN_PYTHON` among `PYTHON_CANDIDATES` → `python -m venv --without-pip .venv` → download the pip zipapp (`PIP_PYZ_URL`, verified against `PIP_PYZ_SHA256`) → `pip.pyz install -r requirements.txt` → `import arc_agi, arcengine` → stamp.
 - **A symlinked `.venv` is never written through:** stamp mismatch → `diverged`. Fix in that worktree: `rm .venv && node scripts/setup.mjs`.
 - `CODE_ARC_PYTHON` skips the bootstrap (test seam); `node scripts/setup.mjs` runs the same bootstrap in the foreground.
@@ -52,9 +54,13 @@ cc proxy ─/plugins/code-arc/─▶ same backend: frontend/, api/*, SSE
 - At startup the sidecar dups fd 1 for the protocol and points fd 1 at fd 2; `sys.stdout`/`sys.stderr` become a redacting writer. Toolkit prints and the toolkit's stdout log handlers land on stderr.
 - Our logger (`code_arc.toolkit`, WARNING) is passed to every `Arcade`; `arc_agi.scorecard`'s handlers are replaced with ours after the toolkit is imported.
 - Redaction (sidecar `Redactor`, Node `redact` in `src/sidecar.js`): the configured key, the toolkit's resolved key (`Arcade.arc_api_key`), and any `Got anonymous API key: …` line.
+- `list_games` fails rather than returning an empty list when `Arcade()` logged a failed `/api/games` fetch (the toolkit only logs it), and drops that arcade so the next call retries; an arcade cached with an empty list is rebuilt once per call, never twice.
+- A 401/403 from arcprize.org is `TOOLKIT_ERROR` with a detail naming the API key (`AUTH_HINT`).
 - Failures are classified (`classify_failure` in `sidecar/engine.py`) from the exception the toolkit raised or logged with `exc_info` (HTTP status and body, exception class), then from message text.
 
-## On-disk state (`$CONDUCTOR_PLUGIN_DATA_DIR`, dirs 0700, files 0600)
+## On-disk state (`$CONDUCTOR_PLUGIN_DATA_DIR`)
+
+The directories and files the plugin itself creates are 0700 / 0600: the data dir, `sessions/` and everything in it, `toolkit/` itself, and `secrets.json`. What the toolkit creates under `toolkit/` (`environment_files/` and the downloaded games) keeps the toolkit's own modes, typically 0755 / 0644.
 
 ```
 secrets.json                 {arcApiKey}

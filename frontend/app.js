@@ -177,9 +177,10 @@ function onStatus(status) {
   }
   banner.hidden = false;
   banner.dataset.state = tk.state || 'unknown';
-  const head = { checking: 'Toolkit: checking', installing: 'Toolkit: installing', failed: 'Toolkit: install failed', diverged: 'Toolkit: dependencies diverged' }[tk.state] || `Toolkit: ${tk.state}`;
+  const head = { checking: 'Toolkit: checking', installing: 'Toolkit: installing', stopped: 'Toolkit: install stopped', failed: 'Toolkit: install failed', diverged: 'Toolkit: dependencies diverged' }[tk.state] || `Toolkit: ${tk.state}`;
   const parts = [el('strong', '', `${head}${tk.phase ? ` (${tk.phase})` : ''}`)];
   if (tk.detail) parts.push(el('pre', 'banner-detail', tk.detail));
+  if (tk.fix) parts.push(el('p', 'banner-fix', `Fix: ${tk.fix}`));
   banner.replaceChildren(...parts);
 }
 
