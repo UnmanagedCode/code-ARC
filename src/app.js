@@ -39,6 +39,7 @@ export async function createApp({
   const bootstrap = createBootstrap({
     checkoutDir: config.checkoutDir,
     pythonOverride: config.python,
+    bundle: config.bundle,
     spawn,
     fetch,
     log,
@@ -52,6 +53,7 @@ export async function createApp({
     cwd: store.toolkitDir,
     python: bootstrap.python,
     testToolkitDir: config.testToolkitDir,
+    gamesDir: bootstrap.gamesDir,
     getApiKey: () => keyStore.get(),
     spawn,
     log,

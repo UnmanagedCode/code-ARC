@@ -1,9 +1,17 @@
 """Toolkit adapter: one Arcade per mode, the live environments, and the ops the
 Node backend calls. Imports arc_agi/arcengine lazily (they pull numpy,
-matplotlib and flask) and never imports numpy itself."""
+matplotlib and flask) and never imports numpy itself.
+
+Arcades, by mode key:
+  normal  NORMAL mode over the toolkit's default dir (local play, downloads)
+  online  ONLINE mode (play on arcprize.org)
+  bundle  OFFLINE mode over a verified offline bundle's games dir, only when
+          configure() named one: no network, never writes into the dir
+"""
 
 import json
 import logging
+import os
 import re
 import threading
 from typing import Any, Optional
@@ -19,6 +27,10 @@ DETAIL_MAX = 300
 # Bound on log text the classifier scans (it is untrusted, remote-written).
 SCAN_MAX = 4000
 ANON_KEY_RE = re.compile(r"(Got anonymous API key: )\S+")
+# With a bundle, how long list_games waits for the web's game list before
+# answering with the bundle's games alone (the web list keeps loading).
+WEB_LIST_WAIT_S = 5.0
+MODES = ("bundle", "normal", "online")
 
 
 class Refusal(Exception):
@@ -226,6 +238,21 @@ def summarize_scorecard(sc: Any) -> Optional[dict]:
     return json.loads(json.dumps(out, default=str))
 
 
+def _game_entry(e: Any, source: str) -> Optional[dict]:
+    gid = str(getattr(e, "game_id", "") or "")
+    if not GAME_ID_RE.match(gid):
+        return None
+    tags = [_cap(t, TAG_MAX) for t in (getattr(e, "tags", None) or [])[:TAGS_MAX]]
+    entry = {
+        "game_id": gid,
+        "title": _cap(getattr(e, "title", None) or gid, TITLE_MAX),
+        "tags": tags,
+        "downloaded": bool(getattr(e, "local_dir", None)),
+        "source": source,
+    }
+    return entry
+
+
 class _Session:
     def __init__(self, env: Any, arcade: Any, card: str, online: bool) -> None:
         self.env = env
@@ -241,9 +268,18 @@ class Engine:
         self.capture = capture
         self.redactor = redactor
         self.api_key: Optional[str] = None
+        self.games_dir: Optional[str] = None
         self.configured = False
+        self.web_list_wait_s = WEB_LIST_WAIT_S
+        # _arcade_lock guards the dicts only; an arcade is built under its
+        # mode's build lock, so a slow NORMAL build never blocks the others.
         self._arcades: dict = {}
         self._arcade_lock = threading.Lock()
+        self._build_locks = {m: threading.Lock() for m in MODES}
+        # Bumped by configure(); an arcade built for an older configuration is dropped.
+        self._generation = 0
+        self._web_thread: Optional[threading.Thread] = None
+        self._web_error: Optional[Refusal] = None
         self._sessions: dict = {}
         self._sessions_lock = threading.Lock()
 
@@ -255,16 +291,28 @@ class Engine:
 
         return arc_agi, arcengine
 
-    def _arcade(self, online: bool) -> Any:
+    def _arcade(self, mode: str) -> Any:
         arc_agi, _ = self._toolkit()
-        mode = "online" if online else "normal"
         with self._arcade_lock:
             arcade = self._arcades.get(mode)
-            if arcade is None:
-                op_mode = arc_agi.OperationMode.ONLINE if online else arc_agi.OperationMode.NORMAL
+            generation = self._generation
+        if arcade is not None:
+            return arcade
+        with self._build_locks[mode]:
+            with self._arcade_lock:
+                arcade = self._arcades.get(mode)
+            if arcade is not None:
+                return arcade
+            if mode == "bundle":
+                arcade = arc_agi.Arcade(arc_api_key="", operation_mode=arc_agi.OperationMode.OFFLINE,
+                                        environments_dir=self.games_dir, logger=self.log)
+            else:
+                op_mode = arc_agi.OperationMode.ONLINE if mode == "online" else arc_agi.OperationMode.NORMAL
                 arcade = arc_agi.Arcade(arc_api_key=self.api_key or "", operation_mode=op_mode, logger=self.log)
-                self.redactor.add(getattr(arcade, "arc_api_key", None))
-                self._arcades[mode] = arcade
+            self.redactor.add(getattr(arcade, "arc_api_key", None))
+            with self._arcade_lock:
+                if self._generation == generation:
+                    self._arcades[mode] = arcade
             return arcade
 
     def _call(self, op: str, fn: Any) -> Any:
@@ -289,18 +337,26 @@ class Engine:
         return s
 
     # -- ops ----------------------------------------------------------------
-    def configure(self, api_key: Optional[str]) -> dict:
+    def configure(self, api_key: Optional[str], games_dir: Optional[str] = None) -> dict:
+        if games_dir is not None and not (isinstance(games_dir, str) and os.path.isabs(games_dir) and os.path.isdir(games_dir)):
+            raise Refusal("INVALID_ARGUMENT", "games_dir must be an absolute path to an existing directory")
         with self._sessions_lock:
             if self._sessions:
                 raise Refusal("SESSIONS_ACTIVE", "cannot reconfigure with live sessions")
         with self._arcade_lock:
             self._arcades.clear()
+            self._generation += 1
+            self._web_thread = None
+            self._web_error = None
         self.api_key = api_key or None
+        self.games_dir = games_dir
         self.redactor.add(self.api_key)
         self.configured = True
         return {}
 
-    def list_games(self) -> dict:
+    def _normal_envs(self) -> list:
+        """The NORMAL arcade's game list; a failed fetch is a refusal."""
+
         def run() -> list:
             with self._arcade_lock:
                 cached = self._arcades.get("normal")
@@ -308,7 +364,7 @@ class Engine:
                 # arcade holding an empty list is rebuilt (once) rather than reused.
                 if cached is not None and not cached.get_environments():
                     del self._arcades["normal"]
-            return self._arcade(False).get_environments()
+            return self._arcade("normal").get_environments()
 
         envs, records = self._call("list_games", run)
         if not envs and any(r.levelno >= logging.WARNING for r in records):
@@ -316,19 +372,65 @@ class Engine:
             with self._arcade_lock:
                 self._arcades.pop("normal", None)
             raise self._fail("list_games", records, "the toolkit could not list games")
-        games = []
-        for e in envs:
-            gid = str(getattr(e, "game_id", "") or "")
-            if not GAME_ID_RE.match(gid):
-                continue
-            tags = [_cap(t, TAG_MAX) for t in (getattr(e, "tags", None) or [])[:TAGS_MAX]]
-            games.append({
-                "game_id": gid,
-                "title": _cap(getattr(e, "title", None) or gid, TITLE_MAX),
-                "tags": tags,
-                "downloaded": bool(getattr(e, "local_dir", None)),
-            })
-        return {"games": games}
+        return envs
+
+    def _build_web(self) -> None:
+        try:
+            self._normal_envs()
+        except Refusal as r:
+            self._web_error = r
+            self.log.warning(f"web game list failed ({r.code})")
+        except Exception as e:  # noqa: BLE001 - a background thread must not die silently
+            self._web_error = Refusal("TOOLKIT_ERROR", self.redactor(f"{type(e).__name__}: {e}")[:DETAIL_MAX])
+
+    def _web_envs(self) -> tuple:
+        """With a bundle: the web's games if they load within web_list_wait_s,
+        else ([], {code, detail}). The build keeps running in the background."""
+        with self._arcade_lock:
+            cached = self._arcades.get("normal")
+        envs = cached.get_environments() if cached is not None else []
+        if envs:
+            return envs, None
+        with self._arcade_lock:
+            t = self._web_thread
+            if t is None or not t.is_alive():
+                self._web_error = None
+                t = threading.Thread(target=self._build_web, name="code-arc-web-list", daemon=True)
+                self._web_thread = t
+                t.start()
+        t.join(self.web_list_wait_s)
+        with self._arcade_lock:
+            cached = self._arcades.get("normal")
+            err = None if t.is_alive() else self._web_error
+        envs = cached.get_environments() if cached is not None else []
+        if envs:
+            return envs, None
+        if err is not None:
+            gap = {"code": err.code, "detail": self.redactor(err.detail)[:DETAIL_MAX]}
+        else:
+            gap = {"code": "WEB_LIST_LOADING", "detail": f"the web game list did not load within {self.web_list_wait_s} s"}
+        self.log.warning(f"web game list unavailable ({err.code if err else 'still loading'}); listing the bundle's games")
+        return [], gap
+
+    def _bundle_ids(self) -> set:
+        return {str(getattr(e, "game_id", "") or "") for e in self._arcade("bundle").get_environments()}
+
+    def list_games(self) -> dict:
+        if not self.games_dir:
+            return {"games": [g for g in (_game_entry(e, "web") for e in self._normal_envs()) if g]}
+        bundled, records = self._call("list_games", lambda: self._arcade("bundle").get_environments())
+        if not bundled and any(r.levelno >= logging.WARNING for r in records):
+            raise self._fail("list_games", records, "the toolkit could not list the bundle's games")
+        games = [g for g in (_game_entry(e, "bundle") for e in bundled) if g]
+        ids = {g["game_id"] for g in games}
+        web, gap = self._web_envs()
+        games += [g for g in (_game_entry(e, "web") for e in web) if g and g["game_id"] not in ids]
+        out: dict = {"games": games}
+        if gap is not None:
+            # Games outside the bundle can't be listed: the backend answers a
+            # start of an unlisted id with this instead of a bare GAME_UNKNOWN.
+            out["web_unavailable"] = gap
+        return out
 
     def open(self, session_id: str, game_id: str, online: bool) -> dict:
         if not GAME_ID_RE.match(game_id or ""):
@@ -338,7 +440,13 @@ class Engine:
                 raise Refusal("INVALID_ARGUMENT", "session id already open")
 
         def run() -> tuple:
-            arcade = self._arcade(bool(online))
+            if online:
+                mode = "online"
+            elif self.games_dir and (game_id in (ids := self._bundle_ids()) or game_id in {i.split("-", 1)[0] for i in ids}):
+                mode = "bundle"
+            else:
+                mode = "normal"
+            arcade = self._arcade(mode)
             card = arcade.create_scorecard(tags=["code-arc"])
             env = arcade.make(game_id, scorecard_id=card)
             return arcade, card, env
@@ -424,7 +532,7 @@ class Engine:
         if op != "configure" and not self.configured:
             raise Refusal("NOT_CONFIGURED", "configure must come first")
         if op == "configure":
-            return self.configure(args.get("api_key"))
+            return self.configure(args.get("api_key"), args.get("games_dir"))
         if op == "list_games":
             return self.list_games()
         if op == "open":

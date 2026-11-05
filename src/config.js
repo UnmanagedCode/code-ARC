@@ -3,6 +3,7 @@
 // never reads PROJECTS_ROOT).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bundleLocations } from './bundle.js';
 
 export const CHECKOUT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_PORT = 8791;
@@ -22,5 +23,7 @@ export function loadConfig(env = process.env) {
     // directory of fake toolkit packages for the sidecar.
     python: env.CODE_ARC_PYTHON || null,
     testToolkitDir: env.CODE_ARC_TEST_TOOLKIT_DIR ? path.resolve(CHECKOUT_DIR, env.CODE_ARC_TEST_TOOLKIT_DIR) : null,
+    // Where an offline bundle may be (docs/bundle.md).
+    bundle: bundleLocations(env, dataDir),
   };
 }

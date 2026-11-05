@@ -10,7 +10,8 @@
 - **Scripted play:** steps an agent's script took carry a **script** badge in the action log, and each run starts with a **Script run k — <note>** header saying what the script tries and why. The step summary says `script` or `tool`. Notes arrive live like steps.
 - **Live:** new steps and session changes arrive as they happen, even from a script stepping at the rate cap; a reconnect fetches only what it missed.
 - **Deep links:** the URL carries `?session=<id>&step=<n>`; pasting it reopens that step.
-- **Toolkit banner:** shown while the toolkit is installing, or with the error and the fix when installing failed or the venv diverged.
+- **Toolkit banner:** shown while the toolkit is installing, or with the error and the fix when installing failed or the venv diverged (**Bundle rejected** for an offline bundle that failed verification).
+- **Toolkit source:** the header says where the toolkit and games come from: `Toolkit and local games: bundle <id> (<n> games)` or `Toolkit and games: web`.
 - Follows cc's light/dark theme (or the OS theme standalone) and cc's session width.
 
 ## Settings
@@ -26,6 +27,13 @@
 - `online:true` on `start_session` plays against arcprize.org with a real scorecard (link in the result and the viewer). Rate limits and idle closes are reported as refusals, never retried silently.
 - Only the agent session that started a game can act on or end it; anyone can observe.
 - **Agent scripting:** for sweeps, searches or replaying a route, an agent writes a Python script with the bundled client (`clients/code_arc.py`, path in `start_session`'s `meta.script`). The script attaches with a note, chains actions, branches on results and reads whole frames as ints; its moves go through the same checks and log as tool moves. A lost token is replaced with `script_access`. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). Contracts: [script-api.md](script-api.md).
+
+## Offline bundle
+
+- Build one archive on a machine with network (`node scripts/bundle.mjs export`): the pinned pip, every wheel, every game's source. Import it on a host without network (`node scripts/bundle.mjs import`), or point `CODE_ARC_BUNDLE` at an extracted copy.
+- With a bundle, the toolkit installs with no download, and local play of the bundle's games needs no network. `list_games` tags each game `source: bundle | web`; web games are added when the web is reachable.
+- Online play is unchanged; without network it fails with `NETWORK_ERROR`.
+- For your own environments only: ARC publishes no license for the games. Details: [bundle.md](bundle.md).
 
 ## The `play-arc` skill
 

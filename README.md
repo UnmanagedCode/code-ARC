@@ -6,7 +6,7 @@ A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that 
 - **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, and replay.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
-Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/script-api.md](docs/script-api.md) (script HTTP API and Python client) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests).
+Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/script-api.md](docs/script-api.md) (script HTTP API and Python client) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests) · [docs/bundle.md](docs/bundle.md) (bundle: install and games without the web).
 
 ## Quick start
 
@@ -44,6 +44,12 @@ rm .venv && node scripts/setup.mjs
 ```
 
 The backend enforces this: a symlinked `.venv` whose pins differ puts the toolkit in the `diverged` state (banner, `DEPS_DIVERGED` refusals) and is never written through. Same rule for npm deps if any are ever added: `rm node_modules && npm install`.
+
+## Bundle (no-web install)
+
+For a host without network: on a machine with network run `node scripts/bundle.mjs export` (writes `bundles/code-arc-<time>.arcbundle`, gitignored; prints the bundle id), copy the file over, then `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir node scripts/bundle.mjs import <file> --expect-sha256 <id>` (or extract it and set `CODE_ARC_BUNDLE=/abs/dir`) and restart the plugin. The venv then installs from the bundle with no download, and the bundle's games play locally with no network; online play is unchanged.
+
+**Licensing:** the bundle holds game sources downloaded from arcprize.org, for which ARC publishes no license. It is for your own environments: never commit, publish or share it. Details, trust model and limits: [docs/bundle.md](docs/bundle.md).
 
 ## Security notes
 

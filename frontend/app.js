@@ -290,14 +290,28 @@ function onNote({ session_id: id, note }) {
 function onStatus(status) {
   const banner = $('toolkit-banner');
   const tk = status.toolkit || {};
+  const source = $('toolkit-source');
+  const b = tk.bundle;
+  if (tk.source === 'bundle' && b?.id) {
+    source.textContent = `Toolkit and local games: bundle ${b.id.slice(0, 12)} (${b.games} games)`;
+    source.title = `${b.path}\ncreated ${b.created_at}\ntarget ${Object.values(b.target || {}).filter(Boolean).join(' ')}`;
+  } else if (tk.source === 'web') {
+    source.textContent = 'Toolkit and games: web';
+    source.title = '';
+  } else {
+    source.textContent = '';
+    source.title = '';
+  }
   if (tk.state === 'ready') {
     banner.hidden = true;
     return;
   }
   banner.hidden = false;
   banner.dataset.state = tk.state || 'unknown';
-  const head = { checking: 'Toolkit: checking', installing: 'Toolkit: installing', stopped: 'Toolkit: install stopped', failed: 'Toolkit: install failed', diverged: 'Toolkit: dependencies diverged' }[tk.state] || `Toolkit: ${tk.state}`;
-  const parts = [el('strong', '', `${head}${tk.phase ? ` (${tk.phase})` : ''}`)];
+  const rejected = tk.state === 'failed' && tk.code?.startsWith('BUNDLE_');
+  const head = rejected ? 'Bundle rejected'
+    : { checking: 'Toolkit: checking', installing: 'Toolkit: installing', stopped: 'Toolkit: install stopped', failed: 'Toolkit: install failed', diverged: 'Toolkit: dependencies diverged' }[tk.state] || `Toolkit: ${tk.state}`;
+  const parts = [el('strong', '', `${head}${tk.phase && !rejected ? ` (${tk.phase})` : ''}`)];
   if (tk.detail) parts.push(el('pre', 'banner-detail', tk.detail));
   if (tk.fix) parts.push(el('p', 'banner-fix', `Fix: ${tk.fix}`));
   banner.replaceChildren(...parts);
