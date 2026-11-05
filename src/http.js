@@ -80,10 +80,16 @@ export function crossSiteGuard(req) {
 // Routes: [method, pattern, handler]; pattern is a string path or a RegExp
 // whose named groups become params. A handler gets (req, res, {params, url}).
 export function createRouter({ routes, fallback, log = console }) {
+  // Keep-alive sockets carry many requests: bind their no-op error handler once.
+  const guarded = new WeakSet();
   return async function handle(req, res) {
     req.on('error', () => {});
     res.on('error', () => {});
-    req.socket?.on('error', () => {});
+    const sock = req.socket;
+    if (sock && !guarded.has(sock)) {
+      guarded.add(sock);
+      sock.on('error', () => {});
+    }
     try {
       const url = new URL(req.url, 'http://localhost');
       const pathname = url.pathname;

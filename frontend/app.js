@@ -3,7 +3,7 @@
 import { getJson, subscribe } from './api.js';
 import { createGrid } from './grid.js';
 import { safeHref } from './safeHref.js';
-import { END_REASONS, renderSessions } from './sessions.js';
+import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
 import { createSettings } from './settings.js';
 import { createStepLog } from './steplog.js';
 
@@ -263,7 +263,9 @@ subscribe({
   },
   session: (meta) => {
     const isNew = !state.sessions.has(meta.id);
-    if (isNew) state.total++;
+    // The server's `total` is the authority: only a session created since
+    // that count adds to it; an older unloaded one is already included.
+    if (isNew && isNewerThanAll(meta, state.sessions.values())) state.total++;
     state.sessions.set(meta.id, meta);
     renderList();
     if (meta.id === state.selected) renderHeader();

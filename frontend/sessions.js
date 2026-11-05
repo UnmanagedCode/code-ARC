@@ -22,6 +22,15 @@ function ownerLine(owner) {
   return parts.join(' · ');
 }
 
+// Whether `meta` is newer than every loaded session — i.e. created after the
+// server counted `total`. An unloaded session that isn't is already counted.
+export function isNewerThanAll(meta, loaded) {
+  for (const s of loaded) {
+    if (s.created_at > meta.created_at || (s.created_at === meta.created_at && s.id >= meta.id)) return false;
+  }
+  return true;
+}
+
 export function renderSessions(listEl, emptyEl, sessions, selectedId, onSelect) {
   emptyEl.hidden = sessions.length > 0;
   const items = sessions.map((s) => {

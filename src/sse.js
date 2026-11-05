@@ -7,7 +7,8 @@
 // replays the whole ring, which holds what this process announced at startup.
 //
 // Bounded: at most `maxClients` connections — a newcomer at the cap evicts the
-// oldest connection, so idle or stuck clients can't lock the viewer out — and
+// most backed-up connection, else the oldest, so stuck clients can't lock the
+// viewer out and a busy local client can't keep evicting it — and
 // a client that is still behind from an earlier write (no 'drain' yet) with
 // more than `maxBufferedBytes` unsent is dropped rather than buffered without
 // limit. One large write (a big initial state) never trips it on its own.
@@ -39,6 +40,16 @@ export function createSseHub({
     res.destroy();
   }
 
+  // The connection to give up for a newcomer at the cap: the most backed-up
+  // one (still undrained, largest backlog), else the oldest.
+  function evictionVictim() {
+    let victim = null;
+    for (const [res, c] of clients) {
+      if (c.waiting && (!victim || res.writableLength > victim.writableLength)) victim = res;
+    }
+    return victim || clients.keys().next().value;
+  }
+
   function send(res, chunk) {
     const c = clients.get(res);
     if (!c) return;
@@ -65,7 +76,7 @@ export function createSseHub({
     // `initial` is a list of [event, data] pairs describing current state,
     // written id-less so they don't move the client's Last-Event-ID.
     handle(req, res, initial = []) {
-      if (clients.size >= maxClients) drop(clients.keys().next().value);
+      if (clients.size >= maxClients) drop(evictionVictim());
       res.writeHead(200, {
         ...headers,
         'content-type': 'text/event-stream; charset=utf-8',

@@ -65,7 +65,7 @@ test('a client that stays behind across publishes is dropped; one that drains in
   assert.equal(hub.clientCount(), 1);
 });
 
-test('at the client cap a newcomer evicts the oldest connection', () => {
+test('at the client cap, with no client backed up, a newcomer evicts the oldest', () => {
   const hub = createSseHub({ timers: noTimers, maxClients: 2 });
   const [a, b, c] = [new FakeRes(), new FakeRes(), new FakeRes()];
   hub.handle(req(), a); // idle forever: never reads, only pings
@@ -78,6 +78,23 @@ test('at the client cap a newcomer evicts the oldest connection', () => {
   hub.publish('step', { n: 1 });
   assert.match(c.received, /event: step/);
   assert.doesNotMatch(a.received, /event: step/);
+});
+
+test('at the cap a newcomer evicts a backed-up squatter before a healthy older viewer', () => {
+  const hub = createSseHub({ timers: noTimers, maxClients: 2 });
+  const viewer = new FakeRes();
+  const squatter = new FakeRes();
+  hub.handle(req(), viewer); // older, keeps up
+  hub.handle(req(), squatter); // newer, never reads
+  hub.publish('step', { n: 1 });
+  viewer.flush();
+  const newcomer = new FakeRes();
+  hub.handle(req(), newcomer);
+  assert.equal(squatter.destroyed, true);
+  assert.equal(viewer.destroyed, false);
+  hub.publish('step', { n: 2 });
+  assert.match(viewer.received, /"n":2/);
+  assert.match(newcomer.received, /"n":2/);
 });
 
 test('a closed client frees its slot even when the injected timer returns undefined', () => {

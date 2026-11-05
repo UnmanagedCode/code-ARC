@@ -111,7 +111,7 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 | `session` | one session meta (create/update) |
 | `step` | `{session_id, step}` |
 
-At most `SSE_MAX_CLIENTS` connections: a new one evicts the oldest. A client that is still behind from an earlier write (no drain yet) with more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected; one large write (the initial state) never trips this on its own. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
+At most `SSE_MAX_CLIENTS` connections: a new one evicts the most backed-up connection, else the oldest. A client that is still behind from an earlier write (no drain yet) with more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected; one large write (the initial state) never trips this on its own. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
 
 ## Sidecar protocol
 

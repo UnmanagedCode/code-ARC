@@ -34,6 +34,29 @@ test('a throwing handler answers 500 with the security headers', async (t) => {
   assert.deepEqual(await res.json(), { error: 'internal error', code: 'INTERNAL' });
 });
 
+test('many keep-alive requests on one socket add one error listener, not one each', async (t) => {
+  const warnings = [];
+  const onWarning = (w) => warnings.push(w.name);
+  process.on('warning', onWarning);
+  t.after(() => process.off('warning', onWarning));
+  const server = http.createServer(createRouter({ routes: [['GET', '/ok', (req, res) => res.end('ok')]], fallback: () => {}, log: { error() {} } }));
+  const sockets = [];
+  server.on('connection', (s) => sockets.push(s));
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  t.after(() => { agent.destroy(); return new Promise((r) => server.close(r)); });
+  const get = () => new Promise((resolve, reject) => {
+    http.get({ port: server.address().port, host: '127.0.0.1', path: '/ok', agent }, (res) => { res.resume(); res.on('end', resolve); }).on('error', reject);
+  });
+  await get();
+  const afterOne = sockets[0].listenerCount('error');
+  for (let i = 0; i < 40; i++) await get();
+  assert.equal(sockets.length, 1, 'all requests shared one keep-alive socket');
+  assert.equal(sockets[0].listenerCount('error'), afterOne);
+  await new Promise((r) => setImmediate(r));
+  assert.ok(!warnings.includes('MaxListenersExceededWarning'));
+});
+
 test('a malformed request gets 400 with the security headers', async (t) => {
   const server = http.createServer(() => {});
   server.on('clientError', onClientError);

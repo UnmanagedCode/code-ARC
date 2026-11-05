@@ -25,9 +25,24 @@ class Sidecar:
         )
         self.lines = queue.Queue()
         self.err = []
+        self.err_cond = threading.Condition()
         threading.Thread(target=self._read, args=(self.p.stdout, self.lines.put), daemon=True).start()
-        threading.Thread(target=self._read, args=(self.p.stderr, self.err.append), daemon=True).start()
+        threading.Thread(target=self._read, args=(self.p.stderr, self._err_line), daemon=True).start()
         self.next_id = 0
+
+    def _err_line(self, line):
+        with self.err_cond:
+            self.err.append(line)
+            self.err_cond.notify_all()
+
+    def stderr_until(self, *needles, timeout=5):
+        """Stderr so far, once every needle has appeared (bounded wait)."""
+        with self.err_cond:
+            ok = self.err_cond.wait_for(lambda: all(n in "".join(self.err) for n in needles), timeout)
+            text = "".join(self.err)
+        if not ok:
+            raise AssertionError(f"stderr never contained {needles!r}; got {text!r}")
+        return text
 
     @staticmethod
     def _read(stream, sink):
@@ -90,10 +105,7 @@ class ProtocolTest(unittest.TestCase):
         r = self.sc.call("step", {"session_id": sid, "action": "ACTION1"})
         self.assertTrue(r["ok"])
         # Every protocol line parsed; the noise went to stderr, redacted.
-        self.sc.call("drop", {"session_id": sid})
-        err = "".join(self.sc.err)
-        self.assertIn("plain chatter", err)
-        self.assertIn("Got anonymous API key: [redacted]", err)
+        err = self.sc.stderr_until("plain chatter", "Got anonymous API key: [redacted]")
         self.assertNotIn("anon-", err)
 
     def test_session_busy_while_a_call_is_in_flight(self):
