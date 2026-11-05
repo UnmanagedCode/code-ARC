@@ -7,7 +7,7 @@ import { promises as fs, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { PassThrough, Readable } from 'node:stream';
 import { gzipSync } from 'node:zlib';
-import { spawn as nodeSpawn } from 'node:child_process';
+import { spawn as nodeSpawn, spawnSync } from 'node:child_process';
 import { BUNDLE_FORMAT, BUNDLE_FORMAT_VERSION, LICENSE_NOTICE, MANIFEST_FILE, normName, parsePins } from '../src/bundle.js';
 import { PIP_VERSION } from '../src/bootstrap.js';
 import { writeTar } from '../src/tar.js';
@@ -184,4 +184,21 @@ export function scriptedSpawn(handler) {
     return child;
   };
   return { spawn, calls };
+}
+
+// Makes a FIFO at `p` (mkfifo, else Python's os.mkfifo); false if the
+// platform can't.
+export function mkfifo(p) {
+  for (const [cmd, args] of [['mkfifo', [p]], ['python3', ['-I', '-c', 'import os,sys; os.mkfifo(sys.argv[1])', p]]]) {
+    const r = spawnSync(cmd, args, { stdio: 'ignore' });
+    if (r.status === 0) return true;
+  }
+  return false;
+}
+
+// Rejects if `p` hasn't settled within `ms` (a test deadline, not a product bound).
+export function settlesWithin(p, ms, what) {
+  let timer;
+  return Promise.race([p, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${what} did not settle within ${ms} ms`)), ms); })])
+    .finally(() => clearTimeout(timer));
 }

@@ -46,7 +46,7 @@ CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir node scripts/bundle.mjs import /path/nam
 - `--expect-sha256 <id>` refuses any archive whose manifest isn't the one you expect (`BUNDLE_ID_MISMATCH`), before anything is extracted. Without it, the bundle is only as authentic as the way you carried it.
 - If `CODE_ARC_BUNDLE` is set, import warns that it shadows the imported bundle.
 
-Or extract it yourself (`tar -xzf name.arcbundle -C /abs/dir`) and set `CODE_ARC_BUNDLE=/abs/dir` in the plugin's environment. Nothing else may be in that directory.
+Or extract it yourself (`tar -xzf name.arcbundle -C /abs/dir`) and set `CODE_ARC_BUNDLE=/abs/dir` in the plugin's environment. Nothing else may be in that directory. **Prefer `import`:** only `scripts/bundle.mjs import` applies the archive's entry-type checks while extracting. System `tar` will create whatever a hostile archive holds (symlinks, FIFOs, devices); the boot verification still rejects such a directory (`BUNDLE_INVALID`), but the extraction itself is unchecked.
 
 Then restart the plugin. `node scripts/setup.mjs` honours a bundle the same way (it reads `CODE_ARC_BUNDLE`, and the data-dir slot when `CONDUCTOR_PLUGIN_DATA_DIR` is set).
 
@@ -67,6 +67,8 @@ Then restart the plugin. `node scripts/setup.mjs` honours a bundle the same way 
 `createBootstrap` (`src/bootstrap.js`), phase `bundle` (state `checking`):
 
 1. Locate (above), then `verifyBundle`: manifest schema, `requirements_sha256` = this checkout's, wheels one-to-one with the pins, no unexpected file or directory, no symlink or special file, every file's size and sha256.
+   - Every file it reads goes through `openRegularFile` (`src/bundle.js`): `lstat` must say regular file before any open, the open is `O_NOFOLLOW|O_NONBLOCK`, and `fstat` re-checks the handle. A FIFO or device (also one swapped in after the check) fails as `BUNDLE_INVALID` instead of blocking.
+   - Shutdown never waits on it: `stop()` aborts the verifier (checked between entries and on every hashed chunk) and the bootstrap stops waiting at once, so the state becomes `stopped` even if a filesystem call is wedged.
 2. If the venv's stamp already matches `requirements.txt`, it is used as is.
 3. Otherwise, before the venv is touched: the bundle's pip must have this checkout's `PIP_PYZ_SHA256` (`BUNDLE_STALE`); `python<target.python>` is tried before the usual candidates; the interpreter's target must equal the bundle's (`BUNDLE_PLATFORM_MISMATCH`).
 4. Venv, then `pip install --isolated --no-index --find-links <bundle>/wheels --require-hashes -r <venv>/code-arc-bundle-requirements.txt` with the bundle's pip. The requirements file has one `name==version --hash=sha256:<wheel sha>` line per pin of this checkout. **No phase `download`; nothing is fetched.**

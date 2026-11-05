@@ -251,35 +251,74 @@ export function parseManifest(buf, limits = BUNDLE_LIMITS) {
 
 // -- verification --------------------------------------------------------------
 
-async function readNoFollow(p, maxBytes) {
-  const fh = await fs.open(p, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+// Opens `p` (labelled `rel` in errors) only if it is a regular file. The
+// lstat refuses a FIFO, device, socket or symlink before any open, and the
+// open is O_NOFOLLOW|O_NONBLOCK, so one swapped in after the lstat can
+// neither be followed nor block the open; fstat then re-checks the handle.
+// Resolves {fh, size}; the caller closes fh.
+export async function openRegularFile(p, rel) {
+  let st;
   try {
-    const st = await fh.stat();
-    if (!st.isFile()) throw invalid(`${path.basename(p)} is not a regular file`);
-    if (st.size > maxBytes) throw invalid(`${path.basename(p)} is over ${maxBytes} bytes`);
-    return await fh.readFile();
+    st = await fs.lstat(p);
+  } catch (e) {
+    if (e.code === 'ENOENT') throw invalid(`missing file ${rel}`);
+    throw e;
+  }
+  if (!st.isFile()) throw invalid(`${rel} is not a regular file`);
+  let fh;
+  try {
+    fh = await fs.open(p, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (e) {
+    if (e.code === 'ENOENT') throw invalid(`missing file ${rel}`);
+    if (e.code === 'ELOOP') throw invalid(`${rel} is not a regular file`);
+    throw e;
+  }
+  const fst = await fh.stat().catch(async (e) => {
+    await fh.close();
+    throw e;
+  });
+  if (!fst.isFile()) {
+    await fh.close();
+    throw invalid(`${rel} is not a regular file`);
+  }
+  return { fh, size: fst.size };
+}
+
+async function readManifest(p, maxBytes) {
+  const { fh, size } = await openRegularFile(p, MANIFEST_FILE);
+  try {
+    if (size > maxBytes) throw invalid(`${MANIFEST_FILE} is over ${maxBytes} bytes`);
+    const buf = await fh.readFile();
+    if (buf.length > maxBytes) throw invalid(`${MANIFEST_FILE} is over ${maxBytes} bytes`);
+    return buf;
   } finally {
     await fh.close();
   }
 }
 
-async function hashNoFollow(p, expectedSize) {
-  const fh = await fs.open(p, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+// Hashes at most expectedSize + 1 bytes (enough to see a size mismatch),
+// checking `signal` on every chunk.
+async function hashFile(p, rel, expectedSize, signal) {
+  const { fh, size } = await openRegularFile(p, rel);
   try {
-    const st = await fh.stat();
-    if (!st.isFile()) return { error: 'is not a regular file' };
-    if (st.size !== expectedSize) return { size: st.size };
+    if (size !== expectedSize) return { size };
     const h = createHash('sha256');
-    for await (const chunk of fh.createReadStream({ autoClose: false })) h.update(chunk);
-    return { size: st.size, sha256: h.digest('hex') };
+    let n = 0;
+    for await (const chunk of fh.createReadStream({ autoClose: false, start: 0, end: expectedSize })) {
+      signal?.throwIfAborted();
+      n += chunk.length;
+      h.update(chunk);
+    }
+    return { size: n, sha256: h.digest('hex') };
   } finally {
     await fh.close();
   }
 }
 
 // The single verifier: boot, the end of import and the end of export.
-// Resolves {id, manifest}; id = sha256 of the manifest bytes.
-export async function verifyBundle(dir, { requirementsText, limits = BUNDLE_LIMITS }) {
+// Resolves {id, manifest}; id = sha256 of the manifest bytes. `signal`
+// (optional) aborts it between entries and on every hashed chunk.
+export async function verifyBundle(dir, { requirementsText, limits = BUNDLE_LIMITS, signal }) {
   const where = `offline bundle ${dir}: `;
   const wrap = (e) => {
     if (e instanceof BundleError) {
@@ -292,7 +331,8 @@ export async function verifyBundle(dir, { requirementsText, limits = BUNDLE_LIMI
   try {
     const st = await fs.lstat(dir);
     if (!st.isDirectory()) throw invalid('is not a directory');
-    const buf = await readNoFollow(path.join(dir, MANIFEST_FILE), limits.manifestMaxBytes);
+    signal?.throwIfAborted();
+    const buf = await readManifest(path.join(dir, MANIFEST_FILE), limits.manifestMaxBytes);
     const manifest = parseManifest(buf, limits);
     const id = sha256(buf);
     if (manifest.requirements_sha256 !== sha256(requirementsText)) {
@@ -309,6 +349,7 @@ export async function verifyBundle(dir, { requirementsText, limits = BUNDLE_LIMI
     let entries = 0;
     const walk = async (rel) => {
       for (const name of await fs.readdir(rel ? path.join(dir, rel) : dir)) {
+        signal?.throwIfAborted();
         const r = rel ? `${rel}/${name}` : name;
         if (++entries > limits.filesMax * 2) throw invalid(`has over ${limits.filesMax * 2} entries`);
         const s = await fs.lstat(path.join(dir, r));
@@ -325,15 +366,8 @@ export async function verifyBundle(dir, { requirementsText, limits = BUNDLE_LIMI
     await walk('');
 
     for (const f of manifest.files) {
-      let got;
-      try {
-        got = await hashNoFollow(path.join(dir, f.path), f.size);
-      } catch (e) {
-        if (e.code === 'ENOENT') throw invalid(`missing file ${f.path}`);
-        if (e.code === 'ELOOP') throw invalid(`${f.path} is a symlink`);
-        throw e;
-      }
-      if (got.error) throw invalid(`${f.path} ${got.error}`);
+      signal?.throwIfAborted();
+      const got = await hashFile(path.join(dir, f.path), f.path, f.size, signal);
       if (got.size !== f.size) throw new BundleError('BUNDLE_HASH_MISMATCH', `${f.path} is ${got.size} bytes, the manifest says ${f.size}`);
       if (got.sha256 !== f.sha256) throw new BundleError('BUNDLE_HASH_MISMATCH', `${f.path} has sha256 ${got.sha256}, the manifest says ${f.sha256}`);
     }

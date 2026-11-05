@@ -9,7 +9,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { createBootstrap, DIVERGED_FIX, FIX, PIP_VERSION } from '../src/bootstrap.js';
 import { bundleInstallArgs } from '../src/bundle.js';
 import { captureLog, freshEnv, json, startApp, until } from './_helpers.mjs';
-import { makeBundleDir, TARGET } from './_bundle.mjs';
+import { makeBundleDir, settlesWithin, TARGET } from './_bundle.mjs';
 
 const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
 const sha = (s) => createHash('sha256').update(s).digest('hex');
@@ -326,4 +326,24 @@ test('with a bundle, python<target> is tried first', async (t) => {
   assert.equal(bs.status().state, 'ready', bs.status().detail);
   assert.deepEqual(calls[0], ['python3.12', '--version']);
   assert.deepEqual(calls.find((c) => c[2] === 'venv').slice(0, 1), ['python3.12']);
+});
+
+test('stop() while the bundle is being verified settles promptly as stopped', async (t) => {
+  const { dir, bundle } = await bundleCheckout(t);
+  let seen = null;
+  // A verification that never finishes on its own (a wedged filesystem).
+  const verify = (d, opts) => {
+    seen = opts.signal;
+    return new Promise(() => {});
+  };
+  const { spawn, calls } = bundleInstaller(dir);
+  const bs = createBootstrap({ checkoutDir: dir, bundle, verify, spawn, fetch: noFetch, pip: { url: 'x', sha256: sha(BUNDLE_PIP) }, log: quiet });
+  const running = bs.run();
+  await until(() => seen !== null);
+  assert.deepEqual([bs.status().state, bs.status().phase], ['checking', 'bundle']);
+  await settlesWithin(bs.stop(), 2000, 'stop()');
+  await settlesWithin(running, 2000, 'run()');
+  assert.equal(bs.status().state, 'stopped');
+  assert.equal(seen.aborted, true, 'the verifier was told to stop');
+  assert.equal(calls.length, 0);
 });

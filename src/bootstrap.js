@@ -100,6 +100,7 @@ export function createBootstrap({
   checkoutDir,
   pythonOverride = null,
   bundle = null, // {envPath, dataDirPath, toolkitDir} (bundleLocations in src/bundle.js), or null
+  verify = verifyBundle, // test seam
   spawn = nodeSpawn,
   fetch = globalThis.fetch,
   log = console,
@@ -129,6 +130,18 @@ export function createBootstrap({
 
   function checkStopped() {
     if (stopped) throw new BootstrapError('STOPPED', 'bootstrap stopped');
+  }
+
+  // Settles with `p`, or rejects STOPPED as soon as stop() is called, so a
+  // slow or wedged filesystem call never holds up shutdown. `p` itself is
+  // also told to stop through `abort.signal` where it accepts one.
+  const stoppedP = new Promise((_, reject) => {
+    abort.signal.addEventListener('abort', () => reject(new BootstrapError('STOPPED', 'bootstrap stopped')), { once: true });
+  });
+  stoppedP.catch(() => {});
+  function unlessStopped(p) {
+    p.catch(() => {});
+    return Promise.race([p, stoppedP]);
   }
 
   async function readStamp() {
@@ -172,12 +185,12 @@ export function createBootstrap({
     set({ state: 'checking', phase: 'bundle' });
     let loc = null;
     try {
-      loc = await locateBundle(bundle);
+      loc = await unlessStopped(locateBundle(bundle));
       if (!loc) {
         set({ source: 'web' });
         return;
       }
-      const { id, manifest } = await verifyBundle(loc.dir, { requirementsText: reqText });
+      const { id, manifest } = await unlessStopped(verify(loc.dir, { requirementsText: reqText, signal: abort.signal }));
       checkStopped();
       if (loc.shadowed) log.log(`[code-arc bootstrap] CODE_ARC_BUNDLE (${loc.dir}) shadows the bundle in ${loc.shadowed}`);
       active = { loc, id, manifest };

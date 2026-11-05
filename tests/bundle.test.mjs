@@ -10,12 +10,12 @@ import path from 'node:path';
 import { gzipSync } from 'node:zlib';
 import { PIP_VERSION } from '../src/bootstrap.js';
 import {
-  BUNDLE_LIMITS, BundleError, bundleInstallArgs, LICENSE_NOTICE, locateBundle, normName, parsePins, validateBundlePath, verifyBundle,
+  BUNDLE_LIMITS, BundleError, bundleInstallArgs, LICENSE_NOTICE, locateBundle, normName, openRegularFile, parsePins, validateBundlePath, verifyBundle,
 } from '../src/bundle.js';
 import { exportBundle } from '../src/bundleExport.js';
 import { importBundle } from '../src/bundleImport.js';
 import { captureLog, FAKES, freshEnv, ROOT } from './_helpers.mjs';
-import { makeBundleDir, packDir, rawEntry, rawTar, ROOT_REQS, scriptedSpawn, sha, snapshot, TARGET } from './_bundle.mjs';
+import { makeBundleDir, mkfifo, packDir, rawTar, ROOT_REQS, scriptedSpawn, settlesWithin, sha, snapshot, TARGET } from './_bundle.mjs';
 
 const FAKE_GAMES = ['fake-maze', 'fake-evil', 'fake-hang', 'fake-slow', 'fake-crash', 'fake-noisy', 'fake-429', 'fake-closed'];
 const PIP_BYTES = Buffer.from('pip zipapp bytes for export');
@@ -337,4 +337,31 @@ test('verifyBundle: tampered → HASH_MISMATCH; extra file, inner symlink, missi
   const slotLink = path.join(env.dataDir, 'bundle');
   await fs.symlink(ok, slotLink);
   await assert.rejects(locateBundle({ envPath: null, dataDirPath: slotLink, toolkitDir }), codeMatching('BUNDLE_INVALID', /symlink/));
+});
+
+test('a FIFO in place of a listed game file, or handed to the open helper, is BUNDLE_INVALID promptly', async (t) => {
+  const env = await freshEnv(t);
+  const b = await makeBundleDir(path.join(env.tmp, 'fifo'));
+  const source = path.join(b.dir, 'games', 'fake', 'maze', 'fake.py');
+  await fs.rm(source);
+  if (!mkfifo(source)) {
+    t.skip('this platform cannot make FIFOs');
+    return;
+  }
+  await assert.rejects(settlesWithin(verifyBundle(b.dir, { requirementsText: ROOT_REQS }), 2000, 'verifyBundle'), codeMatching('BUNDLE_INVALID', /fake\.py is not a regular file/));
+  // The helper every verifier open goes through refuses it too (the
+  // swapped-in-after-the-walk case), without blocking on the open.
+  await assert.rejects(settlesWithin(openRegularFile(source, 'games/fake/maze/fake.py'), 2000, 'openRegularFile'), codeMatching('BUNDLE_INVALID', /not a regular file/));
+});
+
+test('verifyBundle stops when its signal aborts', async (t) => {
+  const env = await freshEnv(t);
+  const b = await makeBundleDir(path.join(env.tmp, 'ok'));
+  const pre = new AbortController();
+  pre.abort();
+  await assert.rejects(verifyBundle(b.dir, { requirementsText: ROOT_REQS, signal: pre.signal }), { name: 'AbortError' });
+  const mid = new AbortController();
+  const running = verifyBundle(b.dir, { requirementsText: ROOT_REQS, signal: mid.signal });
+  mid.abort();
+  await assert.rejects(running, { name: 'AbortError' });
 });

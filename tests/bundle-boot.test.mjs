@@ -8,7 +8,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { verifyBundle } from '../src/bundle.js';
 import { freshEnv, json, readCalls, startApp, startGame, until } from './_helpers.mjs';
-import { fetchSpy, makeBundleDir, netDown, readNet, ROOT_REQS, snapshot } from './_bundle.mjs';
+import { fetchSpy, makeBundleDir, mkfifo, netDown, readNet, ROOT_REQS, settlesWithin, snapshot } from './_bundle.mjs';
 
 const locations = (env, envPath = null) => ({
   envPath, dataDirPath: path.join(env.dataDir, 'bundle'), toolkitDir: path.join(env.dataDir, 'toolkit'),
@@ -154,4 +154,24 @@ test('an invalid winning bundle is a failed state with no fallback', async (t) =
   assert.ok(r.fix);
   assert.deepEqual(await readCalls(env.dataDir), [], 'the toolkit never ran');
   assert.deepEqual(a.spy.calls, []);
+});
+
+test('a placed bundle whose manifest.json is a FIFO fails promptly as BUNDLE_INVALID, and the app still closes', async (t) => {
+  const env = await freshEnv(t);
+  const slot = await makeBundleDir(path.join(env.dataDir, 'bundle'));
+  await fs.rm(path.join(slot.dir, 'manifest.json'));
+  if (!mkfifo(path.join(slot.dir, 'manifest.json'))) {
+    t.skip('this platform cannot make FIFOs');
+    return;
+  }
+  const a = await startApp(t, { env, config: { bundle: locations(env) }, fetch: fetchSpy().fetch });
+  const tk = await until(async () => {
+    const s = (await json(`${a.url}/api/status`)).body.toolkit;
+    return s.state !== 'checking' && s;
+  }, { timeoutMs: 2000 });
+  assert.equal(tk.state, 'failed');
+  assert.equal(tk.code, 'BUNDLE_INVALID');
+  assert.match(tk.detail, /manifest\.json is not a regular file/);
+  assert.ok(tk.fix);
+  await settlesWithin(a.close(), 2000, 'app.close()');
 });
