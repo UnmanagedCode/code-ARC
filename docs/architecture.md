@@ -4,7 +4,7 @@
 cc ──POST /api/mcp──▶ Node backend (server.js, src/) ──JSON lines──▶ Python sidecar (sidecar/, .venv, arc_agi)
 cc proxy ─/plugins/code-arc/─▶ same backend: frontend/, api/*, SSE
 agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same backend (no cc hop)
-                                └── $CONDUCTOR_PLUGIN_DATA_DIR: secrets.json, sessions/, toolkit/
+                                └── $CONDUCTOR_PLUGIN_DATA_DIR: secrets.json, sessions/, images/, toolkit/
 ```
 
 ## Components
@@ -31,8 +31,12 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `src/scriptAccess.js` | In-memory script tokens (sha256, constant-time verify) and runs per session; no I/O |
 | `src/scriptRoutes.js` | `POST api/play/:id/<op>` ([script-api.md](script-api.md)): script guard, bearer parse, pre-schema session/token gate (`sessions.admitScript`), per-op schemas, result shaping |
 | `src/frames.js` | Frame text (full / diff) |
+| `src/png.js` | `encodePng`: minimal PNG encoder (RGB, filter 0, one IDAT, table CRC); knows nothing about ARC |
+| `src/boardImage.js` | `renderBoard` / `boardPng`: frame rows → board image pixels by the rules in [protocol.md](protocol.md) → Board image; `IMAGE_SPEC` (the parsed spec, validated at load) |
+| `src/boardImages.js` | `createBoardImages`: board image files of live sessions (`write`, `prune`, `init`); per-session serialised, latest only, path-checked |
+| `clients/board_image.json` | The board image spec (palette, scale bounds, grid geometry, glyphs): read by `src/boardImage.js` and `clients/code_arc.py`; next to the client so scripts find it |
 | `src/online.js` | ONLINE limits, rate limiter, scorecard URL |
-| `src/store.js` | The only session writer; `src/keyStore.js` the key; `src/atomicFile.js` helpers |
+| `src/store.js` | The only session writer (board image files aside: `src/boardImages.js`); `src/keyStore.js` the key; `src/atomicFile.js` helpers |
 | `src/sse.js` | SSE hub with a replay ring |
 | `sidecar/arc_sidecar.py` | Protocol loop, fd isolation, logging and redaction, a thread per request |
 | `sidecar/engine.py` | Toolkit adapter: one `Arcade` per mode (plus an OFFLINE arcade over a bundle's games), the environments, failure classification, reasoning byte check |
@@ -44,7 +48,7 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 
 ## Lifecycle
 
-- **Start:** `store.init()` loads every session (a `live` one becomes `ended`/`backend_restart`), the HTTP server listens, and `bootstrap.run()` starts in the background. Health and the UI answer throughout.
+- **Start:** `store.init()` loads every session (a `live` one becomes `ended`/`backend_restart`), `images.init()` empties `images/` (nothing in it can belong to a live session, and it clears temp files of a crashed write), the HTTP server listens, and `bootstrap.run()` starts in the background. Health and the UI answer throughout.
 - **First toolkit call:** `sidecar.call()` spawns `<python> -I -u sidecar/arc_sidecar.py` in its own process group, cwd `<data>/toolkit/`, with an env allowlist (`ENV_ALLOWLIST` in `src/sidecar.js`); waits for `ready`, then sends `configure` with the key from `keyStore`.
 - **Each call** has a deadline from `DEADLINES`. On timeout the session is marked `stalled`; the eventual reply is applied (`lateHandler` in `src/sessions.js`) and un-stalls it.
 - **Sidecar exit** (crash, oversized line): pending calls resolve `SIDECAR_EXITED`, live sessions end with `sidecar_exit`, the next call respawns. A deliberate `sidecar.stop()` (key change, shutdown) ends no sessions.
@@ -52,7 +56,8 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 - **Shutdown:** `app.close()` stops the sweep, the bootstrap (`bootstrap.stop()` kills a running venv/pip step's process group and settles the bootstrap as `stopped`), the sidecar and the SSE clients.
 - **Live events are bounded** (`src/sse.js`): at most `SSE_MAX_CLIENTS` connections, a newcomer evicting the most backed-up connection, else the oldest (the backlog preference protects the viewer only from stalled or backed-up clients; a local process that keeps opening fresh connections, each with no backlog, still evicts by age, oldest first, and is limited only by `SSE_MAX_CLIENTS` turnover); a client is dropped only when it is still undrained from an earlier write and over `SSE_MAX_BUFFERED_BYTES`, so a large initial burst alone never drops it. The initial `sessions` event is one page (`SESSIONS_PAGE_MAX`); the viewer fetches older pages on demand. A dropped EventSource reconnects and resumes from the replay ring.
 - **Script tokens** live only in `src/scriptAccess.js`'s memory: minted by `start_session` (rotated by `script_access`), they die with the process, like the sessions they open. Contracts: [script-api.md](script-api.md).
-- **Ending a session prunes its in-memory entries:** `end()` in `src/sessions.js` (every path: `end_session`, idle sweep, sidecar exit, `SCORECARD_CLOSED`, a session the toolkit lost) deletes its `runtime` entry and its script token and runs. Nothing re-creates them: every gate refuses an ended session first, and a late reply for an ended session returns before touching `runtime`. The script API's `base_url` is built from `server.address().port` when a session starts.
+- **Ending a session prunes its in-memory entries:** `end()` in `src/sessions.js` (every path: `end_session`, idle sweep, sidecar exit, `SCORECARD_CLOSED`, a session the toolkit lost) deletes its `runtime` entry and its script token and runs, and queues `images.prune(id)` (a failed prune is logged, never fails the end). Nothing re-creates them: every gate refuses an ended session first, and a late reply for an ended session returns before touching `runtime`. The script API's `base_url` is built from `server.address().port` when a session starts.
+- **Board images vs session end:** `src/boardImages.js` runs a session's writes and prune on one promise chain, and a write checks `isLive` when its turn comes. `end()` marks the meta ended synchronously before it queues the prune, so a write either lands before the prune (which removes it) or sees the session ended and resolves `{ended:true}` without writing. No image outlives its session.
 - **Per-session step rate:** a sliding-window limiter per session (`rt(id).steps`, `createRateLimiter` with `windowMs`) shared by tool and script steps.
 - **Viewer under a burst:** live steps append one row each; past `VIEWER_STEPS_MAX` the oldest row is trimmed (O(1)); rendering in follow mode is coalesced to one per animation frame; a reconnect fetches only `steps?from=<last n + 1>` (a full reload only when the gap is over `VIEWER_STEPS_MAX`). Live steps that arrive while steps load wait in a buffer and are applied after the load.
 - **Online idle sweep:** every `SWEEP_MS` (`src/sessions.js`, injected timers), a live online session idle for `ONLINE_IDLE_CLOSE_MS` ends with `scorecard_auto_closed` and is dropped from the sidecar.
@@ -78,13 +83,14 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 
 ## On-disk state (`$CONDUCTOR_PLUGIN_DATA_DIR`)
 
-The directories and files the plugin itself creates are 0700 / 0600: the data dir, `sessions/` and everything in it, `toolkit/` itself, and `secrets.json`. What the toolkit creates under `toolkit/` (`environment_files/` and the downloaded games) keeps the toolkit's own modes, typically 0755 / 0644.
+The directories and files the plugin itself creates are 0700 / 0600: the data dir, `sessions/` and `images/` and everything in them, `toolkit/` itself, and `secrets.json`. What the toolkit creates under `toolkit/` (`environment_files/` and the downloaded games) keeps the toolkit's own modes, typically 0755 / 0644.
 
 ```
 secrets.json                 {arcApiKey}
 sessions/<sid>/meta.json     session meta (atomic writes)
 sessions/<sid>/steps.jsonl   one step per line, append-only; frames as `frame_z`
 sessions/<sid>/notes.jsonl   one script run note per line, append-only
+images/<sid>/step-<n>-<seq>.png  newest board image of a live session (0600); removed at session end, all of images/ at start
 toolkit/                     sidecar cwd: the toolkit's environment_files/ (downloaded games), .env lookup
 bundle/                      the imported offline bundle (bundle.md); read-only to the toolkit
 ```
@@ -101,5 +107,6 @@ bundle/                      the imported offline bundle (bundle.md); read-only 
 - Node tests run the **real sidecar** on the system `python3` against the **fake toolkit** in `sidecar/tests/fakes/` (`CODE_ARC_PYTHON=python3`, `CODE_ARC_TEST_TOOLKIT_DIR`). The fake mirrors the toolkit's signatures and failure shapes, records every call to `<data>/toolkit/calls.jsonl` (the key as its sha256), and ships games that hang, crash, print, rate-limit or lose their scorecard.
 - Each test gets a fresh data dir and projects root (`freshEnv` in `tests/_helpers.mjs`); clocks, timers, deadlines, the online limit, spawn and fetch are injected through `createApp`.
 - Offline bundle: `tests/_bundle.mjs` builds bundle dirs with real hashes, archives (also malformed ones) and a refusing fetch spy. The fake toolkit logs every request it would send to `<data>/toolkit/net.jsonl` (`{path, mode, ok}`) and fails them all while `<data>/toolkit/fake-net-down` exists; its OFFLINE mode scans a games dir and records `load_source`. `tests/bundle-boot.test.mjs` boots whole apps on that switch.
-- Real toolkit smoke test (network, bootstrapped `.venv`): `RUN_REAL_ARC=1 python3 -m unittest sidecar.tests.test_real_toolkit`. It also checks `frontend/palette.js` against `arc_agi.rendering.COLOR_MAP`, and that an OFFLINE arcade plays a downloaded game with every socket call guarded (`sidecar/tests/netguard.py`, test-only).
+- Board images: `tests/boardImage.test.mjs` decodes with the independent test decoder `tests/_png.mjs` and proves server/client parity by spawning `python3 -I tests/fixtures/png_driver.py <clients dir> <out dir>` (JSON cases `[{rows, scale, grid, out}]` on stdin) and comparing every pixel with `renderBoard`; `tests/boardImages.test.mjs` covers the file lifecycle. Sample image for a visual check: `node harness/board-image.mjs [--scale N] [--no-grid]` boots the backend in-process on a fresh temp data dir and the fake toolkit, plays two moves, prints `{path, data_dir}` and leaves the session (and its image) in place; delete the printed data dir afterwards.
+- Real toolkit smoke test (network, bootstrapped `.venv`): `RUN_REAL_ARC=1 python3 -m unittest sidecar.tests.test_real_toolkit`. It also checks `frontend/palette.js` and the `clients/board_image.json` palette against `arc_agi.rendering.COLOR_MAP`, and that an OFFLINE arcade plays a downloaded game with every socket call guarded (`sidecar/tests/netguard.py`, test-only).
 - Visual check: `node harness/playwright/screenshot.mjs` (needs `CC_PROJECTS_ROOT` and the code-playwright plugin) boots a sandboxed server on the fake toolkit, drives the viewer and writes PNGs to `harness/playwright/out/`. Its script scenario boots `harness/playwright/server.mjs`, which is `server.js` with a raised step rate for a 300-step burst. `node harness/playwright/bundle.mjs` boots on a fixture bundle (`CODE_ARC_BUNDLE`) and on a tampered one: `bundle-ready.png`, `bundle-rejected.png`.

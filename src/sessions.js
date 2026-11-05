@@ -41,9 +41,10 @@ const RUN_REFUSALS = {
 const lastSummary = (o) => ({ state: o.state, levels_completed: o.levels_completed, win_levels: o.win_levels, available_actions: o.available_actions, frame_count: o.frame_count, full_reset: o.full_reset });
 
 // `scriptBase()` is the script API root URL (…/api/play/); `checkoutDir`
-// locates the Python client handed to agents.
+// locates the Python client handed to agents; `images` is the board image
+// store (src/boardImages.js), pruned when a session ends.
 export function createSessions({
-  store, sidecar, bootstrap, hub, scriptBase, checkoutDir,
+  store, images, sidecar, bootstrap, hub, scriptBase, checkoutDir,
   clock = { now: Date.now }, timers = { setInterval, clearInterval }, log = console, idGen = newId, deadlines = DEADLINES,
   onlineRpmLimit = ONLINE_RPM_LIMIT, stepRate = { max: STEP_RATE_MAX, windowMs: STEP_RATE_WINDOW_MS },
 }) {
@@ -123,7 +124,10 @@ export function createSessions({
     const saved = store.update(id, { status: 'ended', end_reason: reason, stalled: false, updated_at: iso(), ...extra });
     runtime.delete(id);
     access.forget(id);
+    // Queued now, after the meta turned ended: see src/boardImages.js.
+    const pruned = images.prune(id).catch((e) => log.error(`[code-arc] pruning board images of ${id} failed: ${e.message}`));
     const next = await saved;
+    await pruned;
     publishSession(next);
     return next;
   }

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ROOT } from './_helpers.mjs';
+import { IMAGE_SPEC } from '../src/boardImage.js';
 import { createMcp } from '../src/mcp.js';
 import { ACTIONS, COORD_MAX, DEADLINES, GAME_ID_RE, REASONING_MAX_CHARS, SESSION_ID_RE } from '../src/limits.js';
 
@@ -45,6 +46,24 @@ test('schema bounds equal src/limits.js', () => {
   assert.equal(tools.act.properties.reasoning.maxLength, REASONING_MAX_CHARS);
   assert.equal(tools.reset.properties.reasoning.maxLength, REASONING_MAX_CHARS);
   assert.deepEqual(tools.act.properties.action.enum, [...ACTIONS]);
+});
+
+test('board image options equal clients/board_image.json and carry no schema default', () => {
+  for (const t of ['act', 'reset', 'observe']) {
+    const p = tools[t].properties;
+    assert.ok(p.frame.enum.includes('image'), t);
+    assert.equal(p.image_scale.type, 'integer', t);
+    assert.equal(p.image_scale.minimum, IMAGE_SPEC.scale.min, t);
+    assert.equal(p.image_scale.maximum, IMAGE_SPEC.scale.max, t);
+    assert.equal(p.image_grid.type, 'boolean', t);
+    // validate() fills schema defaults, which would hide a stray option.
+    assert.equal(p.image_scale.default, undefined, t);
+    assert.equal(p.image_grid.default, undefined, t);
+    // The defaults agents read are the ones the backend applies.
+    assert.match(p.image_scale.description, new RegExp(`default ${IMAGE_SPEC.scale.default}\\b`), t);
+    assert.match(p.image_grid.description, new RegExp(`default ${IMAGE_SPEC.grid.default}\\b`), t);
+    assert.match(p.image_grid.description, new RegExp(`every ${IMAGE_SPEC.grid.every} cells`), t);
+  }
 });
 
 test('every sidecar deadline fits inside the MCP timeout, which cc caps at 120 s', () => {

@@ -1,7 +1,15 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { startApp, startGame } from './_helpers.mjs';
+import { execFile } from 'node:child_process';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { promisify } from 'node:util';
+import { captureLog, ROOT, startApp, startGame } from './_helpers.mjs';
+import { decodePng, rgbOf } from './_png.mjs';
+import { IMAGE_SPEC, renderBoard } from '../src/boardImage.js';
 import { MAX_LIVE_SESSIONS, REASONING_MAX_CHARS } from '../src/limits.js';
+
+const run = promisify(execFile);
 
 const A = { sessionId: 'agent-a', project: 'proj' };
 const B = { sessionId: 'agent-b', project: 'other' };
@@ -186,4 +194,116 @@ test(`a burst of concurrent starts admits exactly ${MAX_LIVE_SESSIONS}`, async (
   assert.equal(started.length, MAX_LIVE_SESSIONS);
   assert.equal(refused.length, n - MAX_LIVE_SESSIONS);
   assert.equal(app.store.list().filter((m) => m.status === 'live').length, MAX_LIVE_SESSIONS);
+});
+
+// frame:'image' (docs/protocol.md → Board image).
+const PNG_SIGNATURE = '\x89PNG';
+
+test('image results carry a path, never pixels; the file is the stored frame at the defaults', async (t) => {
+  const { mcp, app, env } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
+  const sid = await startGame(mcp);
+  const results = {
+    act: await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' }),
+    reset: await mcp('reset', { session_id: sid, frame: 'image' }),
+    observe: await mcp('observe', { session_id: sid, frame: 'image' }),
+  };
+  const imagesDir = path.join(env.dataDir, 'images', sid);
+  for (const [tool, r] of Object.entries(results)) {
+    assert.deepEqual(r.text, [''], tool);
+    assert.deepEqual(Object.keys(r.meta.frame).sort(), ['mode', 'path'], tool);
+    assert.equal(r.meta.frame.mode, 'image', tool);
+    assert.ok(path.isAbsolute(r.meta.frame.path), tool);
+    assert.equal(path.dirname(r.meta.frame.path), imagesDir, tool);
+    const s = JSON.stringify(r);
+    assert.ok(s.length < 4096, `${tool}: result is ${s.length} bytes`);
+    assert.ok(!s.includes(PNG_SIGNATURE) && !s.includes('iVBORw0KGgo'), `${tool}: no PNG bytes`);
+    assert.doesNotMatch(s, /[A-Za-z0-9+/]{200,}/, `${tool}: no base64 run`);
+  }
+  assert.equal(results.observe.meta.step, 2);
+  // The latest file decodes to the stored last frame at the spec defaults.
+  const img = decodePng(await fs.readFile(results.observe.meta.frame.path));
+  const want = renderBoard(app.store.lastFrame(sid), { scale: IMAGE_SPEC.scale.default, grid: IMAGE_SPEC.grid.default });
+  assert.deepEqual([img.width, img.height], [want.width, want.height]);
+  assert.ok(rgbOf(img).equals(want.rgb));
+  assert.deepEqual(await fs.readdir(imagesDir), [path.basename(results.observe.meta.frame.path)], 'latest only');
+});
+
+test('image options are honoured, and each image gets its own path', async (t) => {
+  const { mcp } = await startApp(t);
+  const sid = await startGame(mcp);
+  const small = await mcp('observe', { session_id: sid, frame: 'image', image_scale: IMAGE_SPEC.scale.min, image_grid: false });
+  const img = decodePng(await fs.readFile(small.meta.frame.path));
+  assert.deepEqual([img.width, img.height], [64 * IMAGE_SPEC.scale.min, 64 * IMAGE_SPEC.scale.min]);
+  const again = await mcp('observe', { session_id: sid, frame: 'image' });
+  assert.equal(again.meta.step, small.meta.step);
+  assert.notEqual(again.meta.frame.path, small.meta.frame.path, 'same step, distinct path');
+});
+
+test('image options without frame:image are refused before the toolkit', async (t) => {
+  const { mcp, calls } = await startApp(t);
+  const sid = await startGame(mcp);
+  const before = (await calls()).length;
+  for (const [tool, args] of [
+    ['act', { action: 'ACTION4', frame: 'diff', image_scale: 8 }],
+    ['act', { action: 'ACTION4', image_grid: true }],
+    ['reset', { frame: 'full', image_grid: false }],
+    ['observe', { image_scale: 8 }],
+  ]) {
+    const r = (await mcp(tool, { session_id: sid, ...args })).result;
+    assert.equal(r.code, 'INVALID_ARGUMENT', `${tool} ${JSON.stringify(args)}`);
+    assert.match(r.reason, /frame:'image'/);
+  }
+  assert.equal((await calls()).length, before);
+});
+
+test('image option bounds are refused before the toolkit', async (t) => {
+  const { mcp, calls } = await startApp(t);
+  const sid = await startGame(mcp);
+  const before = (await calls()).length;
+  for (const extra of [{ image_scale: IMAGE_SPEC.scale.min - 1 }, { image_scale: IMAGE_SPEC.scale.max + 1 }, { image_scale: 8.5 }, { image_grid: 'yes' }]) {
+    const r = (await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image', ...extra })).result;
+    assert.equal(r.code, 'INVALID_ARGUMENT', JSON.stringify(extra));
+  }
+  assert.equal((await calls()).length, before);
+});
+
+test('ended sessions get no image', async (t) => {
+  const { mcp, env } = await startApp(t);
+  const sid = await startGame(mcp);
+  await mcp('end_session', { session_id: sid });
+  const r = (await mcp('observe', { session_id: sid, frame: 'image' })).result;
+  assert.equal(r.code, 'SESSION_ENDED');
+  assert.equal(r.end_reason, 'ended_by_agent');
+  assert.deepEqual(await fs.readdir(path.join(env.dataDir, 'images')), []);
+  assert.ok((await mcp('observe', { session_id: sid, frame: 'full' })).meta, 'text frames still work');
+});
+
+test('a failed image write never fails the action', async (t) => {
+  const log = captureLog();
+  const { mcp, env } = await startApp(t, { log });
+  const sid = await startGame(mcp);
+  // A regular file where the session's image dir goes: the write fails.
+  await fs.writeFile(path.join(env.dataDir, 'images', sid), 'not a dir');
+  const r = await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' });
+  assert.equal(r.meta.step, 1, 'the action is recorded');
+  assert.equal(r.meta.frame.mode, 'image');
+  assert.equal(r.meta.frame.path, undefined);
+  assert.match(r.meta.frame.error, /EEXIST|ENOTDIR/);
+  assert.match(r.text[0], /^no image/);
+  assert.match(log.text(), /board image for s-/);
+});
+
+test('server and client agree end to end on one session image', async (t) => {
+  const { mcp, app, env } = await startApp(t);
+  const sid = await startGame(mcp);
+  await mcp('act', { session_id: sid, action: 'ACTION6', x: 10, y: 20 });
+  const r = await mcp('observe', { session_id: sid, frame: 'image' });
+  const out = path.join(env.tmp, 'client.png');
+  const child = run('python3', ['-I', path.join(ROOT, 'tests', 'fixtures', 'png_driver.py'), path.join(ROOT, 'clients'), env.tmp], { timeout: 20000 });
+  child.child.stdin.end(JSON.stringify([{ rows: app.store.lastFrame(sid), scale: IMAGE_SPEC.scale.default, grid: IMAGE_SPEC.grid.default, out: 'client.png' }]));
+  assert.deepEqual(JSON.parse((await child).stdout), [out]);
+  const server = decodePng(await fs.readFile(r.meta.frame.path));
+  const client = decodePng(await fs.readFile(out));
+  assert.deepEqual([client.width, client.height], [server.width, server.height]);
+  assert.ok(rgbOf(client).equals(rgbOf(server)));
 });

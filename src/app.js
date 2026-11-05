@@ -3,6 +3,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { createBoardImages } from './boardImages.js';
 import { createBootstrap } from './bootstrap.js';
 import { createKeyStore } from './keyStore.js';
 import { createMcp } from './mcp.js';
@@ -30,6 +31,8 @@ export async function createApp({
 }) {
   const store = createStore({ dataDir: config.dataDir, log });
   await store.init();
+  const images = createBoardImages({ dataDir: config.dataDir, isLive: (id) => store.get(id)?.status === 'live' });
+  await images.init();
   const keyStore = createKeyStore({ dataDir: config.dataDir });
   const hub = createSseHub({ headers: SECURITY_HEADERS, timers, ...(sseKeepaliveMs ? { keepaliveMs: sseKeepaliveMs } : {}) });
 
@@ -68,10 +71,10 @@ export async function createApp({
     return `http://127.0.0.1:${addr.port}/api/play/`;
   };
   sessions = createSessions({
-    store, sidecar, bootstrap, hub, scriptBase, checkoutDir: config.checkoutDir, clock, timers, log,
+    store, images, sidecar, bootstrap, hub, scriptBase, checkoutDir: config.checkoutDir, clock, timers, log,
     ...(deadlines ? { deadlines } : {}), ...(onlineRpmLimit ? { onlineRpmLimit } : {}), ...(stepRate ? { stepRate } : {}),
   });
-  const mcp = createMcp({ sessions, log });
+  const mcp = createMcp({ sessions, images, log });
   const serveStatic = createStatic({ frontendDir: path.join(config.checkoutDir, 'frontend') });
 
   const sessionRoute = (suffix = '') => new RegExp(`^/api/sessions/(?<id>[^/]+)${suffix}$`);

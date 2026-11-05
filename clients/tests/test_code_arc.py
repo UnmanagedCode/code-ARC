@@ -1,12 +1,18 @@
 """The script client against a threaded http.server fake (no network)."""
 
 import json
+import os
 import socket
+import struct
+import tempfile
 import threading
 import unittest
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from clients.code_arc import MAX_RESPONSE_BYTES, Observation, Refusal, Session, TransportError
+
+SPEC_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "board_image.json")
 
 TOKEN = "tok_ABC-123"
 
@@ -166,6 +172,80 @@ class ClientTest(unittest.TestCase):
             Session.attach(base, TOKEN, "n", timeout=5)
         self.assertIn(base, str(cm.exception))
         self.assertIn("cc's host", str(cm.exception))
+
+
+def decode_png(data):
+    """(width, height, px(x, y) -> (r, g, b)); 8-bit RGB, filter 0 only, CRCs checked."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+    off, chunks = 8, []
+    while off < len(data):
+        (length,) = struct.unpack(">I", data[off:off + 4])
+        kind, body = data[off + 4:off + 8], data[off + 8:off + 8 + length]
+        (crc,) = struct.unpack(">I", data[off + 8 + length:off + 12 + length])
+        assert zlib.crc32(kind + body) & 0xFFFFFFFF == crc, "bad CRC in {}".format(kind)
+        chunks.append((kind, body))
+        off += 12 + length
+    width, height, depth, colour, _, _, interlace = struct.unpack(">IIBBBBB", chunks[0][1])
+    assert (depth, colour, interlace) == (8, 2, 0)
+    raw = zlib.decompress(b"".join(b for k, b in chunks if k == b"IDAT"))
+    stride = 1 + width * 3
+    assert len(raw) == stride * height
+    assert all(raw[y * stride] == 0 for y in range(height)), "non-zero filter byte"
+
+    def px(x, y):
+        i = y * stride + 1 + x * 3
+        return tuple(raw[i:i + 3])
+
+    return width, height, px
+
+
+def rgb(hex_colour):
+    return tuple(int(hex_colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+class SavePngTest(unittest.TestCase):
+    def setUp(self):
+        with open(SPEC_PATH, encoding="utf-8") as f:
+            self.spec = json.load(f)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.obs = Observation(obs_body())
+
+    def test_save_png_decodes_to_the_grid(self):
+        target = os.path.relpath(os.path.join(self.tmp.name, "board.png"))
+        path = self.obs.save_png(target, scale=4, grid=False)
+        self.assertTrue(os.path.isabs(path))
+        self.assertEqual(path, os.path.abspath(target))
+        with open(path, "rb") as f:
+            width, height, px = decode_png(f.read())
+        self.assertEqual((width, height), (64 * 4, 64 * 4))
+        palette = [rgb(c) for c in self.spec["palette"]]
+        for y in range(height):
+            for x in range(width):
+                self.assertEqual(px(x, y), palette[self.obs.grid[y // 4][x // 4]], (x, y))
+        self.assertEqual(os.listdir(self.tmp.name), ["board.png"], "no temp file left")
+
+    def test_defaults_come_from_the_spec(self):
+        path = self.obs.save_png(os.path.join(self.tmp.name, "board.png"))
+        with open(path, "rb") as f:
+            width, height, _ = decode_png(f.read())
+        margin = self.spec["grid"]["margin"] if self.spec["grid"]["default"] else 0
+        side = margin + 64 * self.spec["scale"]["default"]
+        self.assertEqual((width, height), (side, side))
+
+    def test_bad_options_and_frames_raise_and_write_nothing(self):
+        lo, hi = self.spec["scale"]["min"], self.spec["scale"]["max"]
+        target = os.path.join(self.tmp.name, "board.png")
+        for kwargs in ({"scale": lo - 1}, {"scale": hi + 1}, {"scale": True}, {"scale": 8.0}, {"grid": "yes"}, {"grid": 1}):
+            with self.assertRaises(ValueError, msg=repr(kwargs)):
+                self.obs.save_png(target, **kwargs)
+        with self.assertRaises(ValueError):
+            Observation(obs_body(frame=None)).save_png(target)
+        with self.assertRaises(ValueError):
+            Observation(obs_body(frame=["01", "0"])).save_png(target)
+        with self.assertRaises(ValueError):
+            Observation(obs_body(frame=["0"] * 65)).save_png(target)
+        self.assertEqual(os.listdir(self.tmp.name), [])
 
 
 if __name__ == "__main__":
