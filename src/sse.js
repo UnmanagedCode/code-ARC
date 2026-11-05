@@ -7,8 +7,9 @@
 // replays the whole ring, which holds what this process announced at startup.
 //
 // Bounded: at most `maxClients` connections — a newcomer at the cap evicts the
-// most backed-up connection, else the oldest, so stuck clients can't lock the
-// viewer out and a busy local client can't keep evicting it — and
+// most backed-up connection, else the oldest, so stalled clients can't lock
+// the viewer out (a client that keeps opening fresh, unbacked connections
+// still evicts by age; only SSE_MAX_CLIENTS turnover limits it) — and
 // a client that is still behind from an earlier write (no 'drain' yet) with
 // more than `maxBufferedBytes` unsent is dropped rather than buffered without
 // limit. One large write (a big initial state) never trips it on its own.
