@@ -50,7 +50,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 ### Board image
 
-`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and returns its absolute path in `meta.frame.path`; the agent opens it with its Read tool. Every number and colour below is a key of `clients/board_image.json` (the single source, read by both `src/boardImage.js` and `Observation.save_png` in `clients/code_arc.py`).
+`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and returns its absolute path in `meta.frame.path`; the agent opens it with its Read tool. Names written as `palette`, `scale.*` and `grid.*` below are keys of `clients/board_image.json`, the single source for the image's numbers and colours, read by both `src/boardImage.js` and `Observation.save_png` in `clients/code_arc.py`. `FRAME_SIDE` is the largest frame side, `COORD_MAX + 1` from `src/limits.js` (the Python client checks the same bound).
 
 | Option | Values | Default |
 |---|---|---|
@@ -59,11 +59,11 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 - Either option without `frame:"image"` → `INVALID_ARGUMENT` before any toolkit call. Out-of-bounds values → `INVALID_ARGUMENT` (schema). The manifest schemas carry no `default` for them (a schema default would be filled in by `validate()` and hide a stray option); `tests/manifest.test.mjs` pins the bounds and the described defaults to the spec.
 - Live sessions only: `observe` with `frame:"image"` on an ended session → `SESSION_ENDED` (`frame:"full"` still works).
-- Largest image: `grid.margin + 64·scale.max` pixels a side.
+- Largest image: `grid.margin + FRAME_SIDE·scale.max` pixels a side.
 
-**File lifecycle:** `<data dir>/images/<sid>/step-<n>-<seq>.png` (0600, dirs 0700), `n` = the observation's `step`, `seq` = a per-session counter, so every image has a path of its own (a reader never gets a cached older copy). Only the newest file per session is kept. The session's dir is removed when the session ends (every end path) and all of `images/` when the backend starts.
+**File lifecycle:** `<data dir>/images/<sid>/step-<n>-<seq>.png` (0600, dirs 0700), `n` = the observation's `step`, `seq` = a per-session counter, so every image has a path of its own (a reader never gets a cached older copy). Only the newest file per session is kept: each write unlinks the one file the backend wrote before it, nothing else. `images/` and each session dir must be real directories (a symlink or other file in their place makes the write fail with `meta.frame.error`, writing nothing and changing no mode), and a session dir's realpath must sit directly under `images/`'s. The session's dir is removed when the session ends (every end path) and all of `images/` when the backend starts.
 
-**Pixel rules** (PNG: 8-bit RGB, colour type 2, no alpha, not interlaced, filter 0 on every row). `rows` = H×W hex rows, 1 ≤ H, W ≤ 64, rectangular; `s` = scale; `g` = grid on; `M = g ? grid.margin : 0`.
+**Pixel rules** (PNG: 8-bit RGB, colour type 2, no alpha, not interlaced, filter 0 on every row). `rows` = H×W hex rows, 1 ≤ H, W ≤ `FRAME_SIDE`, rectangular; `s` = scale; `g` = grid on; `M = g ? grid.margin : 0`.
 
 - Size: `(M + W·s) × (M + H·s)`. Pixels outside the image are never drawn (labels near an edge are clipped).
 - Margin (`x < M` or `y < M`): `grid.margin_rgb`.
@@ -71,8 +71,8 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 - Lines (`g` only): for each `c = grid.every·k`, `k ≥ 1`, `c < W`, the board pixel column `px = M + c·s` is a vertical line; for `c < H`, the board pixel row `py = M + c·s` a horizontal one. A line pixel is drawn only where `⌊along/grid.dash⌋` is even, `along` = its offset from the board origin along the line (`py − M` vertical, `px − M` horizontal), in `grid.contrast[digit of the cell under it]` (so crossings don't depend on drawing order).
 - Ticks (`g` only): for each `c = grid.every·k`, `k ≥ 0`: columns `c < W` → pixels `px = M + c·s`, `py ∈ [M − grid.tick_len, M)`; rows `c < H` → the same in the left margin (`px ∈ [M − grid.tick_len, M)`, `py = M + c·s`); colour `grid.label_rgb`.
 - Labels (`g` only): the decimal digits of each ticked `c`. Origin: top margin `(M + c·s + grid.label_offset, grid.label_offset)`; left margin `(grid.label_offset, M + c·s + grid.label_offset)`. Digit `i` starts at `origin.x + i·(glyph width + 1)·grid.font_scale`; each `#` at glyph cell `(gx, gy)` of `grid.glyphs[digit]` fills the `grid.font_scale`-square block at `(digit.x + gx·grid.font_scale, origin.y + gy·grid.font_scale)` with `grid.label_rgb`.
-- Rendering fails loudly (throws / raises) on ragged rows, a non-hex digit, a shape outside 1–64 or an option out of bounds.
-- `palette` is `arc_agi.rendering.COLOR_MAP` without alpha (pinned to `frontend/palette.js` by `tests/boardImage.test.mjs`, to the toolkit by the gated real-toolkit test). `contrast[i]` is black where palette colour `i` has `0.299R + 0.587G + 0.114B ≥ 128`, else white.
+- Rendering fails loudly (throws / raises) on ragged rows, a non-hex digit, a shape outside 1–`FRAME_SIDE` or an option out of bounds.
+- `palette` is `arc_agi.rendering.COLOR_MAP` without alpha (pinned to `frontend/palette.js` by `tests/boardImage.test.mjs`, to the toolkit by the gated real-toolkit test). `grid.contrast` is stored in the spec; it was derived from `palette` by the rule "black where palette colour `i` has `0.299R + 0.587G + 0.114B ≥ 128`, else white", which `tests/boardImage.test.mjs` re-checks.
 
 ### Refusals
 

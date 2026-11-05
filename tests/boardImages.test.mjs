@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createBoardImages } from '../src/boardImages.js';
-import { freshEnv, startApp, startGame } from './_helpers.mjs';
+import { captureLog, freshEnv, startApp, startGame } from './_helpers.mjs';
 
 const SID = 's-0123456789ab';
 const ROWS = ['0123', '4567', '89ab', 'cdef'];
@@ -125,4 +125,76 @@ test('every end path prunes the session image: end_session and sidecar exit', as
   assert.equal(app.store.get(b).end_reason, 'sidecar_exit');
   assert.equal(await exists(path.join(dir, b)), false);
   assert.deepEqual(await fs.readdir(dir), []);
+});
+
+test('latest-only removes only the file it wrote before, never a foreign entry', async (t) => {
+  const { img, dir } = await images(t);
+  const a = await img.write(SID, 1, ROWS, OPTS);
+  await fs.writeFile(path.join(dir, SID, 'foreign.txt'), 'kept');
+  await fs.mkdir(path.join(dir, SID, 'foreign-dir'));
+  const b = await img.write(SID, 2, ROWS, OPTS);
+  assert.deepEqual((await fs.readdir(path.join(dir, SID))).sort(), ['foreign-dir', 'foreign.txt', path.basename(b.path)].sort());
+  assert.equal(await exists(a.path), false);
+});
+
+// A victim dir a hostile game might point a symlink at: files, a subdir, an
+// entry named like the session, and a mode the backend would change.
+async function victimDir(env, sid) {
+  const victim = path.join(env.tmp, 'victim');
+  await fs.mkdir(path.join(victim, 'sub'), { recursive: true });
+  await fs.mkdir(path.join(victim, sid));
+  await fs.writeFile(path.join(victim, 'a.txt'), 'a');
+  await fs.writeFile(path.join(victim, 'sub', 'b.txt'), 'b');
+  await fs.writeFile(path.join(victim, sid, 'keep.txt'), 'k');
+  await fs.chmod(victim, 0o755);
+  return victim;
+}
+
+async function snapshotTree(dir) {
+  const out = [];
+  for (const e of await fs.readdir(dir, { recursive: true, withFileTypes: true })) {
+    const p = path.join(e.parentPath ?? e.path, e.name);
+    out.push(`${path.relative(dir, p)}:${(await fs.lstat(p)).mode.toString(8)}`);
+  }
+  return [`.:${(await fs.lstat(dir)).mode.toString(8)}`, ...out.sort()];
+}
+
+test('a symlink planted as the session image dir is refused; its target is untouched, also by the prune', async (t) => {
+  const { mcp, env, app } = await startApp(t);
+  const sid = await startGame(mcp);
+  const victim = await victimDir(env, sid);
+  const before = await snapshotTree(victim);
+  const link = path.join(env.dataDir, 'images', sid);
+  await fs.symlink(victim, link);
+
+  const r = await mcp('observe', { session_id: sid, frame: 'image' });
+  assert.equal(r.meta.frame.path, undefined);
+  assert.match(r.meta.frame.error, /not a real directory/);
+  assert.deepEqual(await snapshotTree(victim), before, 'no mode change, no PNG, nothing removed');
+
+  assert.equal((await mcp('end_session', { session_id: sid })).result.ok, true);
+  assert.equal(app.store.get(sid).status, 'ended');
+  assert.equal(await fs.lstat(link).then(() => true, () => false), false, 'the link itself is removed');
+  assert.deepEqual(await snapshotTree(victim), before, 'prune left the target alone');
+});
+
+test('images/ swapped for a symlink after start is refused by write and prune; the target is untouched', async (t) => {
+  const log = captureLog();
+  const { mcp, env } = await startApp(t, { log });
+  const sid = await startGame(mcp);
+  await mcp('observe', { session_id: sid, frame: 'image' });
+  const victim = await victimDir(env, sid);
+  const before = await snapshotTree(victim);
+  const imagesDir = path.join(env.dataDir, 'images');
+  await fs.rename(imagesDir, path.join(env.dataDir, 'images-moved'));
+  await fs.symlink(victim, imagesDir);
+
+  const r = await mcp('observe', { session_id: sid, frame: 'image' });
+  assert.equal(r.meta.frame.path, undefined);
+  assert.match(r.meta.frame.error, /not a real directory/);
+  assert.deepEqual(await snapshotTree(victim), before, 'no mode change, no PNG, nothing removed');
+
+  assert.equal((await mcp('end_session', { session_id: sid })).result.ok, true, 'a refused prune never fails the end');
+  assert.match(log.text(), /pruning board images of s-[0-9a-f]+ failed: .*not a real directory/);
+  assert.deepEqual(await snapshotTree(victim), before, `prune did not remove victim/${sid}`);
 });

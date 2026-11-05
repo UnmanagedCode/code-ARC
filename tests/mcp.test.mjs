@@ -288,7 +288,7 @@ test('a failed image write never fails the action', async (t) => {
   assert.equal(r.meta.step, 1, 'the action is recorded');
   assert.equal(r.meta.frame.mode, 'image');
   assert.equal(r.meta.frame.path, undefined);
-  assert.match(r.meta.frame.error, /EEXIST|ENOTDIR/);
+  assert.match(r.meta.frame.error, /not a real directory/);
   assert.match(r.text[0], /^no image/);
   assert.match(log.text(), /board image for s-/);
 });
@@ -306,4 +306,39 @@ test('server and client agree end to end on one session image', async (t) => {
   const client = decodePng(await fs.readFile(out));
   assert.deepEqual([client.width, client.height], [server.width, server.height]);
   assert.ok(rgbOf(client).equals(rgbOf(server)));
+});
+
+test('frame:image with no stored frame answers "no frame" and writes nothing', async (t) => {
+  const { mcp, app, env } = await startApp(t);
+  const sid = await startGame(mcp);
+  // The toolkit answers this step without a frame.
+  const call = app.sidecar.call;
+  app.sidecar.call = async (...a) => {
+    const r = await call.apply(app.sidecar, a);
+    if (a[0] === 'step' && r.ok) r.result.obs.frame = null;
+    return r;
+  };
+  const r = await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' });
+  assert.equal(r.meta.step, 1);
+  assert.deepEqual(r.text, ['no frame']);
+  assert.deepEqual(r.meta.frame, { mode: 'image' });
+  assert.deepEqual(await fs.readdir(path.join(env.dataDir, 'images')), []);
+});
+
+test('a session that ends during an image call answers "no image: the session ended"', async (t) => {
+  const { mcp, app, env } = await startApp(t);
+  const sid = await startGame(mcp);
+  // The session ends after the act is recorded, before its image is written.
+  const act = app.sessions.act;
+  app.sessions.act = async (...a) => {
+    const r = await act(...a);
+    await app.sessions.onSidecarExit();
+    return r;
+  };
+  const r = await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' });
+  assert.equal(r.meta.step, 1, 'the action is recorded');
+  assert.deepEqual(r.text, ['no image: the session ended']);
+  assert.deepEqual(r.meta.frame, { mode: 'image' });
+  assert.equal(app.store.get(sid).status, 'ended');
+  assert.deepEqual(await fs.readdir(path.join(env.dataDir, 'images')), []);
 });

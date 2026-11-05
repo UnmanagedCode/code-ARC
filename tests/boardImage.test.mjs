@@ -35,8 +35,8 @@ const pxOf = (img, x, y) => {
 };
 
 // The label_rgb pixel set the rules give for the margins (ticks and digits),
-// as "x,y" keys.
-function labelPixels(rows, s) {
+// as "x,y" keys; with `clip: false`, also the pixels that fall outside the image.
+function labelPixels(rows, s, { clip = true } = {}) {
   const g = IMAGE_SPEC.grid;
   const H = rows.length;
   const W = rows[0].length;
@@ -44,7 +44,7 @@ function labelPixels(rows, s) {
   const width = M + W * s;
   const height = M + H * s;
   const set = new Set();
-  const put = (x, y) => { if (x >= 0 && y >= 0 && x < width && y < height) set.add(`${x},${y}`); };
+  const put = (x, y) => { if (!clip || (x >= 0 && y >= 0 && x < width && y < height)) set.add(`${x},${y}`); };
   const label = (n, ox, oy) => [...String(n)].forEach((d, i) => {
     const glyph = g.glyphs[d];
     const dx = ox + i * (glyph[0].length + 1) * g.font_scale;
@@ -126,10 +126,33 @@ test('grid layout: blocks, dashed contrast lines, ticks and labels in the margin
   }
 });
 
-test('labels past the image edge are clipped, not an error', () => {
-  const img = renderBoard(['3'], { scale: SMIN, grid: true });
-  assert.deepEqual([img.width, img.height], [IMAGE_SPEC.grid.margin + SMIN, IMAGE_SPEC.grid.margin + SMIN]);
-  assert.equal(img.rgb.length, img.width * img.height * 3);
+test('labels past the image edge are clipped: drawn inside, nowhere else', () => {
+  // A 1x1 board at the smallest scale: the "0" labels run past the right and
+  // bottom edges.
+  const rows = ['3'];
+  const s = SMIN;
+  const M = IMAGE_SPEC.grid.margin;
+  const img = renderBoard(rows, { scale: s, grid: true });
+  assert.deepEqual([img.width, img.height], [M + s, M + s]);
+  const inside = labelPixels(rows, s);
+  const all = labelPixels(rows, s, { clip: false });
+  assert.ok(all.size > inside.size, 'the case clips some label pixels');
+  const off = IMAGE_SPEC.grid.label_offset;
+  assert.ok(inside.has(`${M + off},${off}`), 'and keeps the in-image part of the clipped top "0"');
+  // Every pixel: the in-image label pixels are label_rgb; everything else in
+  // the margin is margin_rgb (no clipped pixel wraps onto another row), and
+  // the board is its cell's colour.
+  for (let y = 0; y < img.height; y++) {
+    for (let x = 0; x < img.width; x++) {
+      const want = x >= M && y >= M ? PALETTE[3] : inside.has(`${x},${y}`) ? LABEL_RGB : MARGIN_RGB;
+      assert.deepEqual(pxOf(img, x, y), want, `pixel ${x},${y}`);
+    }
+  }
+});
+
+test('grid.contrast follows the documented luminance rule over the palette', () => {
+  const rule = PALETTE.map(([r, g, b]) => (0.299 * r + 0.587 * g + 0.114 * b >= 128 ? [0, 0, 0] : [255, 255, 255]));
+  assert.deepEqual(CONTRAST, rule);
 });
 
 test('the spec palette is the viewer palette', () => {
