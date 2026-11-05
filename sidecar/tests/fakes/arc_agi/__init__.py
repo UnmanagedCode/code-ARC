@@ -23,8 +23,9 @@ Games:
   fake-closed step fails the way a step on a closed scorecard does.
 
 Keys: one starting `bad-key` is refused by /api/games with 401, one starting
-`offline-` can't reach it. Like the real Arcade.__init__, the failure is only
-logged (with exc_info) and the game list is left empty.
+`offline-` can't reach it; like the real Arcade.__init__, the failure is only
+logged (with exc_info) and the game list is left empty. One starting `small-`
+sees only fake-maze.
 """
 
 import hashlib
@@ -319,7 +320,8 @@ class Arcade:
     def get_environments(self) -> list:
         if self._games_error:
             return []
-        return [EnvironmentInfo(gid, title, list(tags), None) for gid, (title, tags) in GAMES.items()]
+        games = {"fake-maze": GAMES["fake-maze"]} if self.arc_api_key.startswith("small-") else GAMES
+        return [EnvironmentInfo(gid, title, list(tags), None) for gid, (title, tags) in games.items()]
 
     def create_scorecard(self, source_url: Optional[str] = None, tags: Optional[list] = None, opaque: Any = None) -> str:
         card = str(uuid.uuid4())

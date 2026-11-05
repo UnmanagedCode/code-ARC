@@ -22,8 +22,9 @@ export function createSettings(panel, toggle) {
   panel.append(heading, label, row, status, message, note);
 
   const show = (apiKey) => { status.textContent = apiKey.set ? `Key set: ${apiKey.masked}` : 'No key set (anonymous)'; };
+  // The server's reason says what to do (end sessions, wait for another save, …).
   const fail = (r) => {
-    message.textContent = r.status === 409 ? 'End the live game sessions before changing the key.' : (r.body && r.body.error) || `Failed (HTTP ${r.status})`;
+    message.textContent = (r.body && r.body.error) || `Failed (HTTP ${r.status})`;
   };
 
   async function refresh() {

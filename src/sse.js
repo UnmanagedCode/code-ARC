@@ -6,9 +6,12 @@
 // Event ids are `<boot>-<n>`: a Last-Event-ID from an earlier backend process
 // replays the whole ring, which holds what this process announced at startup.
 //
-// Bounded: at most `maxClients` connections (more get 503), and a client that
-// leaves more than `maxBufferedBytes` unsent is dropped rather than buffered
-// without limit (its EventSource reconnects and resumes from the ring).
+// Bounded: at most `maxClients` connections — a newcomer at the cap evicts the
+// oldest connection, so idle or stuck clients can't lock the viewer out — and
+// a client that is still behind from an earlier write (no 'drain' yet) with
+// more than `maxBufferedBytes` unsent is dropped rather than buffered without
+// limit. One large write (a big initial state) never trips it on its own.
+// A dropped EventSource reconnects and resumes from the ring.
 import { randomBytes } from 'node:crypto';
 import { SSE_MAX_BUFFERED_BYTES, SSE_MAX_CLIENTS } from './limits.js';
 
@@ -20,7 +23,7 @@ export function createSseHub({
   maxClients = SSE_MAX_CLIENTS,
   maxBufferedBytes = SSE_MAX_BUFFERED_BYTES,
 } = {}) {
-  const clients = new Map(); // res -> ping timer
+  const clients = new Map(); // res -> {ping, waiting}; insertion order = age
   const ring = [];
   const boot = randomBytes(4).toString('hex');
   let nextId = 0;
@@ -30,18 +33,24 @@ export function createSseHub({
   }
 
   function drop(res) {
-    const ping = clients.get(res);
-    if (ping === undefined) return;
-    timers.clearInterval(ping);
+    if (!clients.has(res)) return;
+    timers.clearInterval(clients.get(res).ping);
     clients.delete(res);
     res.destroy();
   }
 
-  // Writes, then drops the client if it has fallen too far behind.
   function send(res, chunk) {
-    if (!clients.has(res)) return;
-    res.write(chunk);
-    if (res.writableLength > maxBufferedBytes) drop(res);
+    const c = clients.get(res);
+    if (!c) return;
+    // Still undrained since an earlier write and over the cap: it isn't keeping up.
+    if (c.waiting && res.writableLength > maxBufferedBytes) {
+      drop(res);
+      return;
+    }
+    if (!res.write(chunk) && !c.waiting) {
+      c.waiting = true;
+      res.once('drain', () => { c.waiting = false; });
+    }
   }
 
   return {
@@ -56,36 +65,40 @@ export function createSseHub({
     // `initial` is a list of [event, data] pairs describing current state,
     // written id-less so they don't move the client's Last-Event-ID.
     handle(req, res, initial = []) {
-      if (clients.size >= maxClients) {
-        res.writeHead(503, { ...headers, 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'retry-after': '5' });
-        res.end('too many live viewers');
-        return;
-      }
+      if (clients.size >= maxClients) drop(clients.keys().next().value);
       res.writeHead(200, {
         ...headers,
         'content-type': 'text/event-stream; charset=utf-8',
         'cache-control': 'no-store',
         connection: 'keep-alive',
       });
-      const ping = timers.setInterval(() => send(res, ': ping\n\n'), keepaliveMs);
-      ping?.unref?.();
-      clients.set(res, ping);
+      const c = { ping: null, waiting: false };
+      clients.set(res, c);
+      c.ping = timers.setInterval(() => send(res, ': ping\n\n'), keepaliveMs);
+      c.ping?.unref?.();
       req.on('close', () => drop(res));
-      for (const [event, data] of initial) send(res, frame(event, data));
+      // The initial state and any replay go out in one tick, as one burst:
+      // the backlog cap only judges what is still unsent at later writes.
+      const burst = [];
+      for (const [event, data] of initial) burst.push(frame(event, data));
       const header = req.headers['last-event-id'];
       const last = typeof header === 'string' && header !== '' ? header : new URL(req.url, 'http://localhost').searchParams.get('lastEventId');
       if (last) {
         const m = last.match(/^([0-9a-f]+)-(\d+)$/);
         const after = m && m[1] === boot ? Number(m[2]) : 0;
-        for (const e of ring) if (e.n > after) send(res, frame(e.event, e.data, `${boot}-${e.n}`));
+        for (const e of ring) if (e.n > after) burst.push(frame(e.event, e.data, `${boot}-${e.n}`));
+      }
+      if (burst.length && !res.write(burst.join(''))) {
+        c.waiting = true;
+        res.once('drain', () => { c.waiting = false; });
       }
     },
 
     clientCount: () => clients.size,
 
     closeAll() {
-      for (const [res, ping] of clients) {
-        timers.clearInterval(ping);
+      for (const [res, c] of clients) {
+        timers.clearInterval(c.ping);
         res.end();
       }
       clients.clear();

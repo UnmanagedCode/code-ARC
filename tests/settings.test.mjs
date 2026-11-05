@@ -114,3 +114,24 @@ test('a refused key or unreachable API is a refusal, not an empty game list', as
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'offline-0123456789abcdef' })).status, 200);
   assert.equal((await mcp('list_games')).result.code, 'NETWORK_ERROR');
 });
+
+test('a second concurrent key change gets KEY_CHANGE_IN_PROGRESS, not the live-sessions message', async (t) => {
+  const { app, url } = await startApp(t);
+  let release;
+  const changing = app.sessions.changeKey(() => new Promise((r) => { release = r; }));
+  const r = await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: KEY });
+  assert.equal(r.status, 409);
+  assert.equal(r.body.code, 'KEY_CHANGE_IN_PROGRESS');
+  assert.match(r.body.error, /another API key change/);
+  release();
+  await changing;
+  assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: KEY })).status, 200);
+});
+
+test('after a key change, starts validate against the new key\'s game list', async (t) => {
+  const { url, mcp } = await startApp(t);
+  assert.ok((await mcp('list_games')).result.games.some((g) => g.game_id === 'fake-evil'), 'cached under the old key');
+  assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'small-key-0123456789' })).status, 200);
+  assert.equal((await mcp('start_session', { game_id: 'fake-evil' })).result.code, 'GAME_UNKNOWN');
+  assert.ok((await mcp('start_session', { game_id: 'fake-maze' })).meta);
+});

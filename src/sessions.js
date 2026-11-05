@@ -242,12 +242,16 @@ export function createSessions({ store, sidecar, bootstrap, hub, clock = { now: 
 
     // Runs `apply` (persist the new key) with no live or starting session,
     // then stops the sidecar so the next spawn configures the new key.
-    // Refuses SESSIONS_ACTIVE otherwise.
+    // Refuses SESSIONS_ACTIVE otherwise, KEY_CHANGE_IN_PROGRESS while
+    // another change runs.
     async changeKey(apply) {
-      if (keyChanging || liveCount() > 0) return refuse('SESSIONS_ACTIVE', 'end the live game sessions before changing the API key');
+      if (keyChanging) return refuse('KEY_CHANGE_IN_PROGRESS', 'another API key change is still being saved; try again in a moment');
+      if (liveCount() > 0) return refuse('SESSIONS_ACTIVE', 'end the live game sessions before changing the API key');
       keyChanging = true;
       try {
         await apply();
+        // The game list depends on the key.
+        gamesCache = null;
         sidecar.stop();
         return { ok: true };
       } finally {

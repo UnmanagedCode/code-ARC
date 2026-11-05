@@ -8,13 +8,14 @@
 //   deeplink.png       ?session=&step= routing
 //   dark.png           OS dark theme (standalone fallback tokens)
 //   banner.png         toolkit banner for a diverged venv, with its fix
+//   many.png           250 stored sessions: first page plus Load older
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
-import { bootArc, bootDiverged, mcp } from './boot.mjs';
+import { bootArc, bootDiverged, bootSeeded, mcp } from './boot.mjs';
 
 const { withPage } = await import(BROWSER);
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
@@ -82,7 +83,7 @@ try {
     await page.getByRole('button', { name: 'Settings' }).click();
     await page.getByLabel('ARC API key').fill('harness-key-0123456789abcd');
     await page.getByRole('button', { name: 'Save' }).click();
-    await page.getByText('End the live game sessions before changing the key.').waitFor();
+    await page.getByText('end the live game sessions before changing the API key').waitFor();
     await shot(page, 'settings-409.png');
     await mcp(srv.url, 'end_session', { session_id: maze });
     await mcp(srv.url, 'end_session', { session_id: evil }, { sessionId: null, project: null });
@@ -133,6 +134,28 @@ try {
   }, { viewport: { width: 1100, height: 420 } });
 } finally {
   await diverged.close();
+}
+
+const seeded = await bootSeeded(250);
+try {
+  await withPage(async (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    await page.goto(seeded.url);
+    await page.locator('#session-list li').nth(99).waitFor();
+    if ((await page.locator('#session-list li').count()) !== 100) problems.push('first page is not 100 sessions');
+    await page.getByRole('button', { name: 'Load older sessions (150 more)' }).click();
+    await page.locator('#session-list li').nth(199).waitFor();
+    await page.getByRole('button', { name: 'Load older sessions (50 more)' }).waitFor();
+    // A deep link to a session beyond the loaded pages.
+    await page.goto(`${seeded.url}/?session=s-000000000005`);
+    await page.locator('.game-title', { hasText: 'Old game 5' }).waitFor();
+    await page.goto(seeded.url);
+    await page.getByRole('button', { name: 'Load older sessions (150 more)' }).click();
+    await page.locator('#session-list li').nth(199).waitFor();
+    await page.screenshot({ path: path.join(OUT, 'many.png') });
+  }, { viewport: { width: 1280, height: 900 } });
+} finally {
+  await seeded.close();
 }
 
 if (problems.length) {

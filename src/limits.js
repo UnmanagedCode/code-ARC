@@ -13,6 +13,8 @@ export const SESSION_ID_RE = /^s-[0-9a-f]{12}$/;
 export const MAX_LIVE_SESSIONS = 8;
 export const BODY_MAX_BYTES = 65536;
 export const STEPS_PAGE_MAX = 200;
+// Sessions per page of GET api/sessions and in the SSE initial state.
+export const SESSIONS_PAGE_MAX = 100;
 export const SIDECAR_LINE_MAX = 1048576;
 // Detail text carried in a refusal (stderr tails, bootstrap output).
 export const DETAIL_MAX = 1000;
@@ -20,7 +22,8 @@ export const DETAIL_MAX = 1000;
 export const LIST_SESSIONS_MAX = 50;
 // Live viewer connections at once; past this an SSE request gets 503.
 export const SSE_MAX_CLIENTS = 32;
-// Bytes a slow SSE client may leave unsent before it is dropped.
+// Bytes an SSE client may leave unsent while it is still behind from an
+// earlier write; past this it is dropped. A single large write never trips it.
 export const SSE_MAX_BUFFERED_BYTES = 256 * 1024;
 // A diff touching more rows than this is sent as a full frame instead.
 export const DIFF_MAX_ROWS = 24;

@@ -20,6 +20,8 @@ const el = (tag, cls, text) => {
 
 const state = {
   sessions: new Map(),
+  total: 0, // every stored session; `sessions` holds the pages loaded so far
+  next: null, // cursor for the next older page, null when all are loaded
   selected: null,
   steps: [],
   cursor: -1,
@@ -43,6 +45,22 @@ function writeRoute() {
 
 function renderList() {
   renderSessions($('session-list'), $('sessions-empty'), sortedSessions(), state.selected, (id) => select(id));
+  const more = $('sessions-more');
+  more.hidden = !state.next;
+  more.textContent = `Load older sessions (${Math.max(0, state.total - state.sessions.size)} more)`;
+}
+
+function mergePage(page) {
+  for (const s of page.sessions) state.sessions.set(s.id, s);
+  state.total = page.total;
+}
+
+async function loadOlder() {
+  if (!state.next) return;
+  const page = await getJson(`api/sessions?before=${encodeURIComponent(state.next)}`);
+  mergePage(page);
+  state.next = page.next;
+  renderList();
 }
 
 function badge(text, cls) {
@@ -190,8 +208,16 @@ function readRoute() {
   return { session: q.get('session'), step: step !== null && /^\d+$/.test(step) ? Number(step) : null };
 }
 
-function applyRoute() {
+async function applyRoute() {
   const r = readRoute();
+  if (r.session && !state.sessions.has(r.session)) {
+    // A deep link to a session outside the loaded pages.
+    try {
+      const meta = await getJson(`api/sessions/${encodeURIComponent(r.session)}`);
+      state.sessions.set(meta.id, meta);
+      renderList();
+    } catch { /* unknown id: fall back to the newest */ }
+  }
   const target = r.session && state.sessions.has(r.session) ? r.session : sortedSessions()[0]?.id;
   if (!target) return;
   if (target !== state.selected) select(target, r.step);
@@ -204,6 +230,7 @@ function applyRoute() {
   }
 }
 
+$('sessions-more').addEventListener('click', () => { loadOlder().catch(() => {}); });
 $('prev').addEventListener('click', () => { state.follow = false; setCursor(state.cursor - 1); });
 $('next').addEventListener('click', () => setCursor(state.cursor + 1, { manual: true }));
 $('scrub').addEventListener('input', (e) => { state.follow = false; setCursor(Number(e.target.value)); });
@@ -217,19 +244,26 @@ window.addEventListener('popstate', applyRoute);
 let routed = false;
 subscribe({
   status: onStatus,
-  sessions: (list) => {
-    state.sessions = new Map(list.map((s) => [s.id, s]));
-    renderList();
+  // The newest page: {sessions, total, next}. On a reconnect it merges, so
+  // older pages already loaded stay.
+  sessions: (page) => {
+    mergePage(page);
     if (!routed) {
       routed = true;
+      state.next = page.next;
+      renderList();
       applyRoute();
-    } else if (state.selected && state.sessions.has(state.selected)) {
-      // A reconnect: catch up on anything missed.
-      select(state.selected, state.follow ? null : state.steps[state.cursor]?.n ?? null);
+    } else {
+      renderList();
+      if (state.selected && state.sessions.has(state.selected)) {
+        // A reconnect: catch up on anything missed.
+        select(state.selected, state.follow ? null : state.steps[state.cursor]?.n ?? null);
+      }
     }
   },
   session: (meta) => {
     const isNew = !state.sessions.has(meta.id);
+    if (isNew) state.total++;
     state.sessions.set(meta.id, meta);
     renderList();
     if (meta.id === state.selected) renderHeader();

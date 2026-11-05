@@ -12,7 +12,7 @@ import { createSseHub } from './sse.js';
 import { createStatic } from './static.js';
 import { createStore } from './store.js';
 import { createRouter, HttpError, onClientError, readJsonBody, SECURITY_HEADERS, sendJson } from './http.js';
-import { SESSION_ID_RE, STEPS_PAGE_MAX } from './limits.js';
+import { SESSION_ID_RE, SESSIONS_PAGE_MAX, STEPS_PAGE_MAX } from './limits.js';
 
 export async function createApp({
   config,
@@ -76,7 +76,12 @@ export async function createApp({
   const routes = [
     ['GET', '/api/health', (req, res) => sendJson(res, 200, { ok: true })],
     ['GET', '/api/status', (req, res) => sendJson(res, 200, statusBody())],
-    ['GET', '/api/sessions', (req, res) => sendJson(res, 200, { sessions: store.list() })],
+    ['GET', '/api/sessions', (req, res, { url }) => {
+      const before = url.searchParams.get('before');
+      if (before !== null && !SESSION_ID_RE.test(before)) throw new HttpError(400, 'INVALID_ARGUMENT', 'before must be a session id');
+      const limit = Math.min(SESSIONS_PAGE_MAX, Math.max(1, Number.parseInt(url.searchParams.get('limit') || String(SESSIONS_PAGE_MAX), 10) || SESSIONS_PAGE_MAX));
+      sendJson(res, 200, store.page({ before, limit }));
+    }],
     ['GET', sessionRoute(), (req, res, { params }) => sendJson(res, 200, sessionOr404(params.id))],
     ['GET', sessionRoute('/steps'), async (req, res, { params, url }) => {
       sessionOr404(params.id);
@@ -84,7 +89,7 @@ export async function createApp({
       const limit = Math.min(STEPS_PAGE_MAX, Math.max(1, Number.parseInt(url.searchParams.get('limit') || String(STEPS_PAGE_MAX), 10) || STEPS_PAGE_MAX));
       sendJson(res, 200, { steps: await store.readSteps(params.id, from, limit) });
     }],
-    ['GET', '/api/events', (req, res) => hub.handle(req, res, [['status', statusBody()], ['sessions', store.list()]])],
+    ['GET', '/api/events', (req, res) => hub.handle(req, res, [['status', statusBody()], ['sessions', store.page({ limit: SESSIONS_PAGE_MAX })]])],
     ['GET', '/api/settings', async (req, res) => sendJson(res, 200, { apiKey: await keyStore.status() })],
     ['PUT', '/api/settings/api-key', async (req, res) => {
       const body = await readJsonBody(req);

@@ -83,13 +83,13 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 |---|---|
 | `GET api/health` | `{ok:true}`; independent of the toolkit (`healthPath`) |
 | `GET api/status` | `{toolkit:{state, phase, detail, fix, python, code}, sidecar:{running, versions}}`; toolkit `state` ∈ `checking`, `installing`, `ready`, `failed`, `diverged`, `stopped`; `fix` is set for `failed` and `diverged` |
-| `GET api/sessions` | `{sessions:[meta…]}`, newest first |
+| `GET api/sessions?before&limit` | `{sessions:[meta…], total, next}`: newest first, at most `SESSIONS_PAGE_MAX`, starting after the session id `before` (400 if malformed); `next` is the `before` for the following page, `null` at the end; `total` counts every stored session |
 | `GET api/sessions/:id` | meta; 404 `SESSION_UNKNOWN` |
 | `GET api/sessions/:id/steps?from&limit` | `{steps:[…]}` with `n ≥ from`, at most `STEPS_PAGE_MAX` |
 | `GET api/events` | SSE (below) |
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
-| `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting, or another key change runs |
-| `DELETE api/settings/api-key` | clears → `{apiKey}`; 409 `SESSIONS_ACTIVE` |
+| `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting; 409 `KEY_CHANGE_IN_PROGRESS` while another key change is being saved. Error bodies are `{error, code}`; `error` is the reason to show the user |
+| `DELETE api/settings/api-key` | clears → `{apiKey}`; the same 409s |
 | `POST api/mcp` | the MCP endpoint |
 
 Static files: an allowlist of `frontend/` files (`src/static.js`); everything else, including `/pluginBridge.js` and `/pluginTheme.css`, is a real 404.
@@ -107,11 +107,11 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 | Event | Data |
 |---|---|
 | `status` | the `api/status` body; first on every connection, again on changes |
-| `sessions` | the full session list; second on every connection |
+| `sessions` | the newest page, same shape as `GET api/sessions` (`{sessions, total, next}`); second on every connection. Older sessions: `GET api/sessions?before=<next>` |
 | `session` | one session meta (create/update) |
 | `step` | `{session_id, step}` |
 
-At most `SSE_MAX_CLIENTS` connections (more get 503 with `retry-after`); a client leaving more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
+At most `SSE_MAX_CLIENTS` connections: a new one evicts the oldest. A client that is still behind from an earlier write (no drain yet) with more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected; one large write (the initial state) never trips this on its own. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
 
 ## Sidecar protocol
 

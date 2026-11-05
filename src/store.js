@@ -94,8 +94,27 @@ export function createStore({ dataDir, log = console }) {
       }
     },
 
+    // Newest first (created_at, then id, both descending).
     list() {
-      return [...metas.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0));
+      return [...metas.values()].sort((a, b) => {
+        if (a.created_at !== b.created_at) return a.created_at < b.created_at ? 1 : -1;
+        return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
+      });
+    },
+
+    // One page of list(): sessions after the `before` id (from the start
+    // when absent), at most `limit`. `next` is the cursor for the following
+    // page, null at the end; `total` counts every stored session.
+    page({ before = null, limit }) {
+      const all = this.list();
+      let start = 0;
+      if (before) {
+        const i = all.findIndex((m) => m.id === before);
+        start = i < 0 ? all.length : i + 1;
+      }
+      const sessions = all.slice(start, start + limit);
+      const more = start + limit < all.length;
+      return { sessions, total: all.length, next: more && sessions.length ? sessions.at(-1).id : null };
     },
     get: (id) => metas.get(id) || null,
     lastFrame: (id) => lastFrames.get(id) || null,

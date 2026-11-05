@@ -15,7 +15,7 @@ description: How to play ARC-AGI-3 games well with the Code ARC tools (code-arc_
 - On a refusal (`result.ok: false`), read `code`:
   - `RATE_LIMITED` → wait `retry_after_ms` once; never loop.
   - `SCORECARD_CLOSED`, `SESSION_ENDED` → the session is over; start a new one only if asked to continue.
-  - `TOOLKIT_NOT_READY` → the toolkit is installing; tell the user, retry a little later.
+  - `TOOLKIT_NOT_READY` → temporary (toolkit installing, or the API key being changed): relay `reason` to the user, retry a little later.
   - `TOOLKIT_UNAVAILABLE`, `DEPS_DIVERGED` → tell the user the `detail` and `fix`; don't retry in a loop.
   - `NOT_OWNER` → another agent's game; leave it alone.
   - `TOOLKIT_TIMEOUT`, `SESSION_STALLED` → `observe` before acting again.

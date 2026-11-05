@@ -4,9 +4,9 @@ import http from 'node:http';
 import net from 'node:net';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { json, ROOT, sendJsonReq, sseCollect, startApp, startGame } from './_helpers.mjs';
+import { freshEnv, json, ROOT, sendJsonReq, sseCollect, startApp, startGame } from './_helpers.mjs';
 import { createRouter, onClientError, SECURITY_HEADERS } from '../src/http.js';
-import { STEPS_PAGE_MAX } from '../src/limits.js';
+import { SESSIONS_PAGE_MAX, SSE_MAX_BUFFERED_BYTES, STEPS_PAGE_MAX } from '../src/limits.js';
 
 const FRONTEND = path.join(ROOT, 'frontend');
 
@@ -128,4 +128,55 @@ test('status reports the toolkit and sidecar', async (t) => {
   assert.equal(s.toolkit.state, 'ready');
   assert.equal(s.sidecar.running, true);
   assert.deepEqual(s.sidecar.versions, { arc_agi: '0.9.9', arcengine: '0.9.3' });
+});
+
+// Writes `n` ended sessions straight into a data dir, as a long-used install has.
+async function seedSessions(dataDir, n) {
+  const ids = [];
+  for (let i = 0; i < n; i++) {
+    const id = `s-${i.toString(16).padStart(12, '0')}`;
+    const t = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
+    const meta = {
+      id, game_id: 'fake-maze', title: `Old game ${i} ${'·'.repeat(200)}`, mode: 'local',
+      owner: { sessionId: 'agent-old', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
+      status: 'ended', end_reason: 'ended_by_agent', stalled: false, created_at: t, updated_at: t, last_activity_at: t,
+      step_count: 0, last: { state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1], frame_count: 1, full_reset: true },
+    };
+    await fs.mkdir(path.join(dataDir, 'sessions', id), { recursive: true });
+    await fs.writeFile(path.join(dataDir, 'sessions', id, 'meta.json'), JSON.stringify(meta));
+    ids.push(id);
+  }
+  return ids;
+}
+
+test('with thousands of stored sessions the viewer stream stays up and pages through them all', async (t) => {
+  const env = await freshEnv(t);
+  const n = 1200;
+  const ids = await seedSessions(env.dataDir, n);
+  const { url, mcp, app } = await startApp(t, { env });
+  assert.ok(Buffer.byteLength(JSON.stringify(app.store.list())) > SSE_MAX_BUFFERED_BYTES, 'all sessions together exceed the backlog cap');
+
+  let sid = null;
+  const events = await sseCollect(`${url}/api/events`, (evs) => evs.some((e) => e.event === 'step'), {
+    onEvent: async (ev) => { if (ev.event === 'sessions') sid = await startGame(mcp); },
+  });
+  const initial = events.find((e) => e.event === 'sessions').data;
+  assert.equal(initial.sessions.length, SESSIONS_PAGE_MAX);
+  assert.equal(initial.total, n);
+  assert.equal(initial.sessions[0].id, ids.at(-1), 'newest first');
+  assert.ok(initial.next);
+  assert.ok(events.some((e) => e.event === 'session' && e.data.id === sid), 'live events still arrive');
+
+  const seen = [];
+  let page = (await json(`${url}/api/sessions`)).body;
+  for (;;) {
+    seen.push(...page.sessions.map((s) => s.id));
+    assert.ok(page.sessions.length <= SESSIONS_PAGE_MAX);
+    if (!page.next) break;
+    page = (await json(`${url}/api/sessions?before=${page.next}`)).body;
+  }
+  assert.equal(seen.length, n + 1);
+  assert.equal(new Set(seen).size, n + 1, 'no duplicates across pages');
+  assert.equal(seen[0], sid);
+  assert.equal((await json(`${url}/api/sessions?before=nope`)).status, 400);
 });
