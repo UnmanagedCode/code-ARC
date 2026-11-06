@@ -235,3 +235,56 @@ test('onChange fires on every cursor, mode and playing change', () => {
   step(() => pb.setIntervalMs(250));
   step(() => pb.trim());
 });
+
+// Pins: switching to Replay during a paced Live burst cancels the pending advance.
+test('setMode replay mid-burst cancels the pending advance', () => {
+  const { clock, pb } = setup();
+  pb.load(1, 0, 'live');
+  pb.append();
+  pb.append();
+  assert.equal(clock.pending(), 1, 'an advance is armed');
+  pb.setMode('replay');
+  assert.equal(clock.pending(), 0);
+  clock.advance(10 * I);
+  assert.equal(pb.cursor, 0);
+  assert.equal(clock.pending(), 0);
+});
+
+// Pins: load resets playback state itself, whatever came before it.
+for (const mode of ['replay', 'live']) {
+  test(`load into ${mode} stops a playing replay and drops its timer`, () => {
+    const { clock, pb } = setup();
+    pb.load(10, 0, 'replay');
+    pb.play();
+    assert.equal(pb.playing, true);
+    assert.equal(clock.pending(), 1);
+    pb.load(10, 4, mode);
+    assert.equal(pb.playing, false);
+    assert.equal(clock.pending(), 0);
+    clock.advance(10 * I);
+    assert.equal(pb.cursor, 4);
+  });
+}
+
+// Pins: Play at the end shows step 0 for a full interval before advancing.
+test('play at the end holds step 0 for a full interval, after a long stay on the last step', () => {
+  const { clock, pb } = setup();
+  pb.load(4, 3, 'replay');
+  clock.advance(10 * I);
+  pb.play();
+  assert.equal(pb.cursor, 0);
+  assert.equal(clock.pending(), 1);
+  clock.advance(I - 1);
+  assert.equal(pb.cursor, 0);
+  clock.advance(1);
+  assert.equal(pb.cursor, 1);
+});
+
+// Pins: behind is 0 in Replay, however far the cursor is from the newest step.
+test('behind is 0 in replay after seeking to the middle', () => {
+  const { pb } = setup();
+  pb.load(10, 9, 'live');
+  pb.seek(4);
+  assert.equal(pb.mode, 'replay');
+  assert.equal(pb.behind, 0);
+});
