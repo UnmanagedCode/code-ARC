@@ -5,6 +5,7 @@ import { createGrid } from './grid.js';
 import { mergeNotes, noteFor, sourceOf } from './runs.js';
 import { safeHref } from './safeHref.js';
 import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
+import { DEFAULT_INTERVAL_MS, INTERVALS_MS, createPlayback } from './playback.js';
 import { createSettings } from './settings.js';
 import { createStepLog } from './steplog.js';
 
@@ -26,8 +27,6 @@ const state = {
   selected: null,
   steps: [],
   notes: [], // the selected session's script run notes
-  cursor: -1,
-  follow: true,
   loadToken: 0,
   // While steps load, live steps wait here and are applied after the load.
   loading: false,
@@ -35,8 +34,14 @@ const state = {
   renderQueued: false,
 };
 
+// Owns the shown step and the Live/Replay mode; the render is rAF-coalesced.
+const playback = createPlayback({
+  clock: { now: () => performance.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
+  onChange: () => scheduleRender(),
+});
+
 const grid = createGrid($('grid'), $('hover'));
-const log = createStepLog($('steplog'), { onPick: (i) => setCursor(i, { manual: true }), noteOf: (step) => noteFor(state.notes, step) });
+const log = createStepLog($('steplog'), { onPick: (i) => playback.seek(i), noteOf: (step) => noteFor(state.notes, step) });
 createSettings($('settings'), $('settings-toggle'));
 
 const sortedSessions = () => [...state.sessions.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
@@ -44,7 +49,7 @@ const sortedSessions = () => [...state.sessions.values()].sort((a, b) => (a.crea
 function writeRoute() {
   const q = new URLSearchParams();
   if (state.selected) q.set('session', state.selected);
-  if (state.selected && !state.follow && state.cursor >= 0) q.set('step', String(state.steps[state.cursor]?.n ?? ''));
+  if (state.selected && playback.mode === 'replay' && playback.cursor >= 0) q.set('step', String(state.steps[playback.cursor]?.n ?? ''));
   const next = q.toString() ? `?${q}` : location.pathname;
   history.replaceState(null, '', next);
 }
@@ -80,7 +85,7 @@ function renderHeader() {
     box.replaceChildren(el('p', 'muted', 'Select a session.'));
     return;
   }
-  const step = state.steps[state.cursor];
+  const step = state.steps[playback.cursor];
   const shown = step || s.last || {};
   const title = el('h2', 'game-title', s.title || s.game_id);
   const facts = el('div', 'facts');
@@ -109,17 +114,32 @@ function renderHeader() {
   box.replaceChildren(...parts);
 }
 
-function renderStep() {
-  const step = state.steps[state.cursor];
-  grid.draw(step ? step.frame : null);
+function renderControls() {
+  const { mode, cursor, count, playing, behind } = playback;
+  $('mode-live').setAttribute('aria-pressed', String(mode === 'live'));
+  $('mode-replay').setAttribute('aria-pressed', String(mode === 'replay'));
+  const play = $('play');
+  play.textContent = playing ? 'Pause' : 'Play';
+  play.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  play.disabled = mode === 'live' || count < 2;
   const scrub = $('scrub');
-  scrub.max = String(Math.max(0, state.steps.length - 1));
-  scrub.value = String(Math.max(0, state.cursor));
-  scrub.disabled = state.steps.length < 2;
-  $('prev').disabled = state.cursor <= 0;
-  $('next').disabled = state.cursor >= state.steps.length - 1;
+  scrub.max = String(Math.max(0, count - 1));
+  scrub.value = String(Math.max(0, cursor));
+  scrub.disabled = count < 2;
+  $('prev').disabled = cursor <= 0;
+  $('next').disabled = cursor >= count - 1;
+  $('interval').value = String(playback.intervalMs);
+  const showBehind = mode === 'live' && behind > 0;
+  $('behind').hidden = !showBehind;
+  $('latest').hidden = !showBehind;
+  $('behind').textContent = `${behind} ${behind === 1 ? 'step' : 'steps'} behind`;
+}
+
+function renderStep() {
+  const step = state.steps[playback.cursor];
+  grid.draw(step ? step.frame : null);
+  renderControls();
   $('scrub-label').textContent = step ? `step ${step.n} of ${state.steps.at(-1).n}` : '';
-  $('follow').checked = state.follow;
   if (step) {
     const xy = step.x !== undefined ? ` at (${step.x},${step.y})` : '';
     $('step-summary').textContent = `#${step.n} ${step.action}${xy} · ${sourceOf(step)} · ${new Date(step.ts).toLocaleTimeString()} · ${step.frame_count} frame(s)`;
@@ -128,8 +148,9 @@ function renderStep() {
     $('step-summary').textContent = '';
     $('reasoning').textContent = '';
   }
-  log.select(state.cursor);
+  log.select(playback.cursor);
   renderHeader();
+  writeRoute();
 }
 
 // A script step shows its run's note, then its own reasoning.
@@ -143,14 +164,6 @@ function renderReasoning(step) {
   const head = el('div', 'run-note');
   head.append(el('strong', '', `Run ${step.run} note: `), note ? note.text : '(not loaded)');
   box.replaceChildren(head, el('div', 'step-reasoning', step.reasoning || '(no step reasoning)'));
-}
-
-function setCursor(i, { manual = false } = {}) {
-  if (!state.steps.length) return;
-  state.cursor = Math.max(0, Math.min(state.steps.length - 1, i));
-  if (manual) state.follow = state.cursor === state.steps.length - 1 && state.follow;
-  renderStep();
-  writeRoute();
 }
 
 // Steps with n >= from; null once the selection moved on.
@@ -178,10 +191,11 @@ function addStep(step) {
   if (state.steps.length && step.n <= state.steps.at(-1).n) return;
   state.steps.push(step);
   log.append(state.steps);
+  playback.append();
   if (state.steps.length > VIEWER_STEPS_MAX) {
     state.steps.shift();
     log.trimFirst(state.steps);
-    state.cursor = Math.max(0, state.cursor - 1);
+    playback.trim();
   }
 }
 
@@ -191,8 +205,7 @@ function scheduleRender() {
   state.renderQueued = true;
   requestAnimationFrame(() => {
     state.renderQueued = false;
-    if (state.follow) setCursor(state.steps.length - 1);
-    else renderStep();
+    renderStep();
   });
 }
 
@@ -213,14 +226,13 @@ async function select(id, wantStep = null) {
   state.selected = id;
   state.steps = [];
   state.notes = [];
-  state.cursor = -1;
-  state.follow = wantStep === null;
+  playback.dispose();
+  playback.load(0, -1, 'live');
   const token = ++state.loadToken;
   startLoading();
   renderList();
   log.reset([]);
   renderStep();
-  writeRoute();
   const total = Math.max(0, (state.sessions.get(id)?.step_count ?? 0) + 1);
   let steps;
   let notes;
@@ -235,13 +247,14 @@ async function select(id, wantStep = null) {
   state.notes = mergeNotes(notes, state.notes);
   state.steps = steps;
   log.reset(steps);
-  finishLoading();
   let i = state.steps.length - 1;
   if (wantStep !== null) {
     const at = state.steps.findIndex((s) => s.n === wantStep);
     if (at >= 0) i = at;
   }
-  setCursor(i);
+  // History is shown as recorded, not paced; only later arrivals are.
+  playback.load(state.steps.length, i, wantStep === null ? 'live' : 'replay');
+  finishLoading();
 }
 
 // After a reconnect: fetch only the steps after the last one held, unless
@@ -251,7 +264,7 @@ async function catchUp() {
   const last = state.steps.at(-1);
   const behind = (state.sessions.get(id)?.step_count ?? 0) - (last?.n ?? 0);
   if (!last || state.loading || behind > VIEWER_STEPS_MAX) {
-    await select(id, state.follow ? null : state.steps[state.cursor]?.n ?? null);
+    await select(id, playback.mode === 'live' ? null : state.steps[playback.cursor]?.n ?? null);
     return;
   }
   const token = state.loadToken;
@@ -339,22 +352,25 @@ async function applyRoute() {
   if (target !== state.selected) select(target, r.step);
   else if (r.step !== null) {
     const i = state.steps.findIndex((s) => s.n === r.step);
-    if (i >= 0) {
-      state.follow = false;
-      setCursor(i);
-    }
+    if (i >= 0) playback.seek(i);
   }
 }
 
 $('sessions-more').addEventListener('click', () => { loadOlder().catch(() => {}); });
-$('prev').addEventListener('click', () => { state.follow = false; setCursor(state.cursor - 1); });
-$('next').addEventListener('click', () => setCursor(state.cursor + 1, { manual: true }));
-$('scrub').addEventListener('input', (e) => { state.follow = false; setCursor(Number(e.target.value)); });
-$('follow').addEventListener('change', (e) => {
-  state.follow = e.target.checked;
-  if (state.follow) setCursor(state.steps.length - 1);
-  else writeRoute();
-});
+$('prev').addEventListener('click', () => playback.seek(playback.cursor - 1));
+$('next').addEventListener('click', () => playback.seek(playback.cursor + 1));
+$('scrub').addEventListener('input', (e) => playback.seek(Number(e.target.value)));
+$('mode-live').addEventListener('click', () => playback.setMode('live'));
+$('mode-replay').addEventListener('click', () => playback.setMode('replay'));
+$('play').addEventListener('click', () => (playback.playing ? playback.pause() : playback.play()));
+$('latest').addEventListener('click', () => playback.jumpToLatest());
+$('interval').addEventListener('change', (e) => playback.setIntervalMs(Number(e.target.value)));
+for (const ms of INTERVALS_MS) {
+  const o = el('option', '', `${ms} ms`);
+  o.value = String(ms);
+  $('interval').append(o);
+}
+$('interval').value = String(DEFAULT_INTERVAL_MS);
 window.addEventListener('popstate', applyRoute);
 
 let routed = false;
