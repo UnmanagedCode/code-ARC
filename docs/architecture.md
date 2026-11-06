@@ -19,7 +19,7 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `src/static.js` | Frontend file allowlist |
 | `src/bootstrap.js` | Builds `.venv` (state machine below) |
 | `src/bundle.js` | Offline bundle policy: locations, manifest schema, path allowlist, `BUNDLE_LIMITS`, the one verifier (`verifyBundle`), install args ([bundle.md](bundle.md)) |
-| `src/tar.js` | Streaming POSIX ustar writer and fail-closed reader (files and directories only) |
+| `src/tar.js` | Streaming POSIX ustar writer (pax `path` record for long file names) and fail-closed reader (files, directories and that one pax form only) |
 | `src/bundleImport.js` | `importBundle`: untrusted archive → staging → verify → atomic rename into `<data>/bundle` |
 | `src/bundleExport.js` | `exportBundle`: pip, wheels and games into a verified `.arcbundle` |
 | `src/proc.js` | Child runner shared by the bootstrap and export: deadlines, process-group kill, `stopAll`, captured stdout |
