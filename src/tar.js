@@ -1,16 +1,21 @@
 // A minimal POSIX ustar writer and a fail-closed reader: regular files and
-// directories only, streamed, no dependencies. The reader rejects every other
-// entry kind (links, devices, FIFOs, pax and GNU extension headers) rather
-// than skipping it.
+// directories only, streamed, no dependencies. A file path that does not fit
+// ustar's name/prefix fields travels in one pax extended header holding exactly
+// one `path` record; the reader accepts that form and nothing else from pax. It
+// rejects every other entry kind (links, devices, FIFOs, pax global and GNU
+// extension headers) rather than skipping it.
 const BLOCK = 512;
 const RECORD = 10240;
 const NAME_MAX = 100;
 const PREFIX_MAX = 155;
 const SIZE_MAX = 8 ** 11 - 1;
-const TYPES = { '0': 'file', '\0': 'file', '5': 'dir' };
+const PAX_MAX = BLOCK;
+const PAX_NAME = '././@PaxHeader';
+const PAX_RE = /^([1-9][0-9]*) path=([\x20-\x7e]+)\n$/;
+const TYPES = { '0': 'file', '\0': 'file', '5': 'dir', x: 'pax' };
 const TYPE_NAMES = {
   '1': 'hard link', '2': 'symlink', '3': 'character device', '4': 'block device', '6': 'FIFO', '7': 'contiguous file',
-  x: 'pax header', g: 'pax global header', L: 'GNU long name', K: 'GNU long link', S: 'GNU sparse file',
+  g: 'pax global header', L: 'GNU long name', K: 'GNU long link', S: 'GNU sparse file',
 };
 
 export class TarError extends Error {}
@@ -27,21 +32,18 @@ function splitPath(p) {
     const name = p.slice(i + 1);
     if (Buffer.byteLength(prefix) <= PREFIX_MAX && name.length > 0 && Buffer.byteLength(name) <= NAME_MAX) return { prefix, name };
   }
-  throw new TarError(`path too long for ustar: ${p.slice(0, 80)}…`);
+  return null;
 }
 
-function header({ type, path, size }) {
+function ustarHeader({ flag, name, prefix = '', size, mode }) {
   const h = Buffer.alloc(BLOCK);
-  const { prefix, name } = splitPath(type === 'dir' ? `${path}/` : path);
-  if (!/^[\x20-\x7e]+$/.test(path)) throw new TarError(`path is not printable ASCII: ${JSON.stringify(path)}`);
-  if (type === 'file' && (!Number.isSafeInteger(size) || size < 0 || size > SIZE_MAX)) throw new TarError(`bad size for ${path}`);
   h.write(name, 0, NAME_MAX, 'ascii');
-  octal(h, 100, 8, type === 'dir' ? 0o755 : 0o644);
+  octal(h, 100, 8, mode);
   octal(h, 108, 8, 0);
   octal(h, 116, 8, 0);
-  octal(h, 124, 12, type === 'dir' ? 0 : size);
+  octal(h, 124, 12, size);
   octal(h, 136, 12, 0);
-  h[156] = (type === 'dir' ? '5' : '0').charCodeAt(0);
+  h[156] = flag.charCodeAt(0);
   h.write('ustar\0', 257, 6, 'binary');
   h.write('00', 263, 2, 'ascii');
   h.write(prefix, 345, PREFIX_MAX, 'ascii');
@@ -54,12 +56,41 @@ function header({ type, path, size }) {
   return h;
 }
 
+// "<length> path=<p>\n", where <length> counts the whole record including itself.
+function paxRecord(p) {
+  const tail = ` path=${p}\n`;
+  let n = tail.length + 1;
+  for (let m = String(n).length + tail.length; m !== n; m = String(n).length + tail.length) n = m;
+  return `${n}${tail}`;
+}
+
+// The header block(s) for an entry: one, or for a long file path a pax header,
+// its record and the file's header.
+function headers({ type, path: p, size }) {
+  if (!/^[\x20-\x7e]+$/.test(p)) throw new TarError(`path is not printable ASCII: ${JSON.stringify(p)}`);
+  if (type === 'file' && (!Number.isSafeInteger(size) || size < 0 || size > SIZE_MAX)) throw new TarError(`bad size for ${p}`);
+  const fit = splitPath(type === 'dir' ? `${p}/` : p);
+  if (fit) return [ustarHeader({ flag: type === 'dir' ? '5' : '0', ...fit, size: type === 'dir' ? 0 : size, mode: type === 'dir' ? 0o755 : 0o644 })];
+  if (type !== 'file') throw new TarError(`path too long for ustar: ${p.slice(0, 80)}…`);
+  const record = paxRecord(p);
+  if (record.length > PAX_MAX) throw new TarError(`path too long: ${p.slice(0, 80)}…`);
+  const body = Buffer.alloc(PAX_MAX);
+  body.write(record, 'ascii');
+  return [
+    ustarHeader({ flag: 'x', name: PAX_NAME, size: record.length, mode: 0o644 }),
+    body.subarray(0, Math.ceil(record.length / BLOCK) * BLOCK),
+    ustarHeader({ flag: '0', name: p.slice(-NAME_MAX), size, mode: 0o644 }),
+  ];
+}
+
 // Yields the archive's bytes. `entries`: {type:'file'|'dir', path, size, read: () => AsyncIterable<Buffer>}.
 export async function* writeTar(entries) {
   let written = 0;
   for await (const e of entries) {
-    yield header(e);
-    written += BLOCK;
+    for (const h of headers(e)) {
+      yield h;
+      written += h.length;
+    }
     if (e.type !== 'file') continue;
     let n = 0;
     for await (const chunk of e.read()) {
@@ -155,6 +186,10 @@ function parseHeader(h) {
   const size = parseOctal(h, 124, 12, 'size');
   const name = field(h, 0, NAME_MAX, 'name');
   const prefix = field(h, 345, PREFIX_MAX, 'prefix');
+  if (type === 'pax') {
+    if (size < 1 || size > PAX_MAX) throw new TarError(`pax header size ${size} is outside 1..${PAX_MAX}`);
+    return { type, size };
+  }
   let p = prefix ? `${prefix}/${name}` : name;
   if (type === 'dir') {
     if (size !== 0) throw new TarError(`directory ${p} has a size`);
@@ -171,14 +206,32 @@ function parseHeader(h) {
 // null); file bytes are awaited into it in order.
 export async function readTar(chunks, { onEntry }) {
   const r = byteReader(chunks);
+  let paxPath = null;
   for (;;) {
     const h = await r.exact(BLOCK);
     if (isZero(h)) {
+      if (paxPath !== null) throw new TarError('pax header is not followed by a file');
       if (!isZero(await r.exact(BLOCK))) throw new TarError('malformed end-of-archive marker');
       await r.drainZeros();
       return;
     }
     const entry = parseHeader(h);
+    if (entry.type === 'pax') {
+      if (paxPath !== null) throw new TarError('pax header follows a pax header');
+      const body = (await r.exact(entry.size)).toString('latin1');
+      const m = PAX_RE.exec(body);
+      if (!m || Number(m[1]) !== body.length) throw new TarError('pax header must hold exactly one path record');
+      paxPath = m[2];
+      const padding = (BLOCK - (entry.size % BLOCK)) % BLOCK;
+      if (padding) await r.exact(padding);
+      continue;
+    }
+    if (paxPath !== null) {
+      if (entry.type !== 'file') throw new TarError(`pax header is followed by a ${entry.type}, not a file`);
+      if (paxPath.endsWith('/')) throw new TarError(`file ${paxPath} ends in /`);
+      entry.path = paxPath;
+      paxPath = null;
+    }
     const sink = await onEntry(entry);
     if (entry.type !== 'file') continue;
     let left = entry.size;

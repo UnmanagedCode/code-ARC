@@ -113,6 +113,23 @@ export function rawEntry({
   return Buffer.concat([h, body, pad]);
 }
 
+// A pax record "<len> key=value\n"; `len` overrides the (correct) length.
+export const paxRecord = (key, value, { len } = {}) => {
+  const tail = ` ${key}=${value}\n`;
+  let n = tail.length + 1;
+  for (let m = String(n).length + tail.length; m !== n; m = String(n).length + tail.length) n = m;
+  return `${len ?? n}${tail}`;
+};
+
+// A pax extended header (typeflag x) carrying `body`.
+export const paxEntry = (body, overrides) => rawEntry({ name: '././@PaxHeader', type: 'x', body: Buffer.from(body), ...overrides });
+
+// The real manylinux wheel file name of the pin with the longest normalised name.
+export function longWheelName(pins) {
+  const p = pins.reduce((a, b) => (b.norm.length > a.norm.length ? b : a));
+  return `${normName(p.name).replace(/-/g, '_')}-${p.version}-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl`;
+}
+
 // A raw archive of `entries` (rawEntry inputs or Buffers), with the end marker.
 export function rawTar(entries, { end = true } = {}) {
   const parts = entries.map((e) => (Buffer.isBuffer(e) ? e : rawEntry(e)));

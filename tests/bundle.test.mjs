@@ -15,7 +15,7 @@ import {
 import { exportBundle } from '../src/bundleExport.js';
 import { importBundle } from '../src/bundleImport.js';
 import { captureLog, FAKES, freshEnv, ROOT } from './_helpers.mjs';
-import { makeBundleDir, mkfifo, packDir, rawTar, ROOT_REQS, scriptedSpawn, settlesWithin, sha, snapshot, TARGET } from './_bundle.mjs';
+import { longWheelName, makeBundleDir, mkfifo, packDir, paxEntry, paxRecord, rawTar, ROOT_REQS, scriptedSpawn, settlesWithin, sha, snapshot, TARGET } from './_bundle.mjs';
 
 const FAKE_GAMES = ['fake-maze', 'fake-evil', 'fake-hang', 'fake-slow', 'fake-crash', 'fake-noisy', 'fake-429', 'fake-closed'];
 const PIP_BYTES = Buffer.from('pip zipapp bytes for export');
@@ -37,9 +37,12 @@ function exportSpawn({ skipPin = null } = {}) {
       return (async () => {
         const req = await fs.readFile(args[args.indexOf('-r') + 1], 'utf8');
         const dest = args[args.indexOf('-d') + 1];
-        for (const p of parsePins(req)) {
+        const pins = parsePins(req);
+        const longPin = pins.reduce((a, b) => (b.norm.length > a.norm.length ? b : a));
+        for (const p of pins) {
           if (p.name === skipPin) continue;
-          await fs.writeFile(path.join(dest, `${normName(p.name).replace(/-/g, '_')}-${p.version}-py3-none-any.whl`), `wheel ${p.name}`);
+          const name = p.norm === longPin.norm ? longWheelName(pins) : `${normName(p.name).replace(/-/g, '_')}-${p.version}-py3-none-any.whl`;
+          await fs.writeFile(path.join(dest, name), `wheel ${p.name}`);
         }
         return { code: 0 };
       })();
@@ -82,9 +85,10 @@ test('export produces a self-contained archive whose manifest describes exactly 
   assert.equal(r.games, FAKE_GAMES.length);
   assert.deepEqual(await fs.readdir(path.dirname(out)), ['b.arcbundle'], 'no partial file left');
 
-  const imported = await importBundle({ archive: out, dataDir: env.dataDir, checkoutDir: ROOT, log: quiet });
+  const imported = await importBundle({ archive: out, dataDir: env.dataDir, checkoutDir: ROOT, log: quiet, expectId: r.id });
   assert.equal(imported.id, r.id);
   const m = imported.manifest;
+  assert.ok(m.wheels.some((w) => Buffer.byteLength(path.posix.basename(w.file)) > 100), 'a wheel name past ustar\'s 100-byte field survives export and import');
   assert.deepEqual(m.target, TARGET);
   assert.equal(m.requirements_sha256, sha(ROOT_REQS));
   assert.equal(m.notice, LICENSE_NOTICE);
@@ -221,6 +225,10 @@ test('malicious archives are rejected and leave nothing behind', async (t) => {
     'drive letter': [manifest, { name: 'C:/games/x.py', body: Buffer.from('x') }, /bad path/],
     symlink: [manifest, { name: source, type: '2', linkname: sentinel }, /symlink/],
     hardlink: [manifest, { name: source, type: '1', linkname: '/etc/passwd' }, /hard link/],
+    'pax parent traversal': [manifest, paxEntry(paxRecord('path', `../../${'e'.repeat(110)}.py`)), { name: 'x', body: Buffer.from('x') }, /bad path|\.\./],
+    'pax absolute path': [manifest, paxEntry(paxRecord('path', `${sentinel}/${'e'.repeat(110)}.py`)), { name: 'x', body: Buffer.from('x') }, /bad path/],
+    'pax path over pathMax': [manifest, paxEntry(paxRecord('path', `wheels/${'a'.repeat(250)}.whl`)), { name: 'x', body: Buffer.from('x') }, /bad path/],
+    'pax before a symlink': [manifest, paxEntry(paxRecord('path', source)), { name: 'x', type: '2', linkname: sentinel }, /symlink/],
     'unlisted file': [manifest, { name: 'games/fake/zzz/fake.py', body: Buffer.from('x') }, /unlisted/],
     'manifest not first': [{ name: source, body: await fileBytes(source) }, manifest, /first entry/],
     duplicate: [manifest, { name: source, body: await fileBytes(source) }, { name: source, body: await fileBytes(source) }, /duplicate/],
