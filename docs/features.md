@@ -5,11 +5,16 @@
 - **Session list** (newest first; the newest page loads at once, **Load older sessions** fetches more): game title, `local`/`online` badge, status (`Live`, `Stalled`, or how it ended), step and state, and who is playing — the cc session id (shortened) and project, or "unknown caller". Inside cc, **Open session** jumps to the playing agent's session (when it is live).
 - **Header strip:** game, state, levels as `completed/total`, mode, and for online sessions a **Scorecard on arcprize.org** link. Badges for a stalled session and for "Scorecard auto-closed by arcprize.org (15 min idle)".
 - **Frame:** the 64×64 grid in the ARC palette, scaled crisply. Hover a cell to see `x,y = value`.
-- **Replay:** a scrubber with previous/next buttons and **Follow live** (on by default; it turns off when you scrub back). Clicking a row in the **Action log** jumps to that step.
+- **Live and Replay modes:** a **Live | Replay** switch next to the scrubber.
+  - **Live** (the default) shows every step in order, each held on screen for at least the interval, so a script firing at the rate cap plays in slow motion. While the shown step lags the newest, the viewer says "N steps behind" and offers **Jump to latest**. A step arriving more than an interval after the previous one shows at once.
+  - **Replay** has **Play/Pause**, previous/next and the scrubber. Play advances one step per interval and stops at the last step; Play at the last step restarts from the first loaded step. Play is disabled in Live.
+  - Manual navigation (scrubber, previous/next, an **Action log** row, a deep link) enters Replay, paused. **Live** jumps to the newest step and paces only later arrivals; a session opened without a `step` shows its newest step directly (recorded history is not paced).
+  - **Interval:** a selector with the choices in `INTERVALS_MS` (`frontend/playback.js`), default `DEFAULT_INTERVAL_MS`; it applies to both modes and is not kept across page loads.
+  - Ended sessions can be replayed. Replay covers the steps the viewer loaded (the newest `VIEWER_STEPS_MAX`, `frontend/app.js`).
 - **Reasoning:** the selected step's reasoning, exactly as the agent wrote it. For a scripted step, the note of its run comes first ("Run k note: …").
 - **Scripted play:** steps an agent's script took carry a **script** badge in the action log, and each run starts with a **Script run k — <note>** header saying what the script tries and why. The step summary says `script` or `tool`. Notes arrive live like steps.
-- **Live:** new steps and session changes arrive as they happen, even from a script stepping at the rate cap; a reconnect fetches only what it missed.
-- **Deep links:** the URL carries `?session=<id>&step=<n>`; pasting it reopens that step.
+- **Live updates:** new steps and session changes arrive as they happen, even from a script stepping at the rate cap (the action log gets each row at once; the shown step is paced, see Live mode); a reconnect fetches only what it missed.
+- **Deep links:** the URL carries `?session=<id>&step=<n>`; pasting it reopens that step in Replay, paused. Live mode writes no `step`.
 - **Toolkit banner:** shown while the toolkit is installing, or with the error and the fix when installing failed or the venv diverged (**Bundle rejected** for an offline bundle that failed verification).
 - **Toolkit source:** the header says where the toolkit and games come from: `Toolkit and local games: bundle <id> (<n> games)` or `Toolkit and games: web`.
 - Follows cc's light/dark theme (or the OS theme standalone) and cc's session width.

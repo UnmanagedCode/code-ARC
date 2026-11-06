@@ -34,12 +34,18 @@
           </div>
           <div id="hover" class="hover muted" aria-live="off">&nbsp;</div>
           <div class="scrubber" aria-label="Replay">
+            <div class="mode-switch" role="group" aria-label="Mode">
+              <button id="mode-live" type="button" aria-pressed="true">Live</button>
+              <button id="mode-replay" type="button" aria-pressed="false">Replay</button>
+            </div>
             <button id="prev" type="button" aria-label="Previous step">&#9664;</button>
+            <button id="play" type="button" aria-label="Play" disabled>Play</button>
             <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Step">
             <button id="next" type="button" aria-label="Next step">&#9654;</button>
             <span id="scrub-label" class="scrub-label muted"></span>
-            <label class="follow"><input id="follow" type="checkbox" checked> Follow live</label>
+            <label class="interval">Interval <select id="interval"></select></label>
           </div>
+          <div class="live-status" role="status"><span id="behind" class="behind" hidden></span> <button id="latest" type="button" hidden>Jump to latest</button></div>
         </div>
         <section class="reasoning" aria-labelledby="reasoning-heading">
           <h3 id="reasoning-heading">Reasoning</h3>

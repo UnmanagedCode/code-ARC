@@ -11,7 +11,9 @@
 //   banner.png         toolkit banner for a diverged venv, with its fix
 //   many.png           250 stored sessions: first page plus Load older
 //   script.png         scripted runs: run headers with notes, script badges
-//   script-burst.png   after a live 300-step script burst, still following
+//   script-burst.png   after a live 300-step script burst, caught up with Jump to latest
+//   paced-behind.png   mid-burst in Live: the shown step lags, "N steps behind" and Jump to latest
+//   replay.png         Replay playing through the maze session
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
@@ -82,9 +84,31 @@ try {
     const latest = await page.evaluate(() => document.getElementById('grid').toDataURL());
     await page.getByRole('button', { name: /^#1 ACTION4/ }).click();
     await page.waitForFunction((l) => document.getElementById('grid').toDataURL() !== l, latest);
-    if (await page.locator('#follow').isChecked()) problems.push('follow live still on after scrubbing back');
+    if ((await page.locator('#mode-replay').getAttribute('aria-pressed')) !== 'true') problems.push('not in Replay after picking a log row');
     if (!new URL(page.url()).search.includes('step=1')) problems.push(`route not written: ${page.url()}`);
     await shot(page, 'scrub.png');
+
+    // Replay: from the first step, Play shows every step once, in order, then stops.
+    await page.locator('#steplog button').first().click();
+    await page.waitForFunction(() => /^step 0 of/.test(document.getElementById('scrub-label').textContent));
+    await page.locator('#play').click();
+    const seen = [];
+    let shotTaken = false;
+    for (let k = 0; k < 400; k++) {
+      const label = await page.locator('#scrub-label').textContent();
+      const n = Number(label.match(/^step (\d+) of (\d+)/)[1]);
+      const last = Number(label.match(/of (\d+)$/)[1]);
+      if (seen.at(-1) !== n) seen.push(n);
+      if (!shotTaken && n >= 2) { await shot(page, 'replay.png'); shotTaken = true; }
+      if (n === last && (await page.locator('#play').getAttribute('aria-label')) === 'Play') break;
+      await page.waitForTimeout(50);
+    }
+    if (seen.length < 3 || seen.some((n, i) => n !== i)) problems.push(`replay did not step 0,1,2,... once each: ${JSON.stringify(seen)}`);
+    if ((await page.locator('#play').getAttribute('aria-label')) !== 'Play') problems.push('Play did not return at the end of the replay');
+    await page.locator('#mode-live').click();
+    await page.waitForFunction(() => document.getElementById('mode-live').getAttribute('aria-pressed') === 'true');
+    await page.waitForFunction((n) => document.getElementById('scrub-label').textContent === `step ${n} of ${n}`, seen.at(-1));
+    if (new URL(page.url()).search.includes('step=')) problems.push(`step still in the route after going Live: ${page.url()}`);
 
     // Settings: refused while sessions are live, then saved and masked.
     await page.getByRole('button', { name: 'Settings' }).click();
@@ -178,13 +202,24 @@ try {
     await page.getByRole('button', { name: /^#1 ACTION4/ }).click();
     await page.waitForFunction(() => document.getElementById('step-summary').textContent.includes('· tool ·'));
     if ((await page.locator('#reasoning').textContent()) !== 'Tool move before scripting.') problems.push('tool step reasoning');
-    await page.locator('#follow').check();
+    await page.locator('#mode-live').click();
 
     ({ run } = await play('note', { run, note: 'Burst: paint 300 cells to check the viewer keeps up.' }));
     for (let i = 0; i < 300; i++) await play('act', { run, action: 'ACTION6', x: i % 64, y: 30 + Math.floor(i / 64), reasoning: `paint ${i + 1}` });
     await page.locator('#steplog li').nth(309).waitFor({ timeout: 10000 });
+    // Paced: the shown step lags the newest, and advances one step per interval.
+    await page.locator('#behind').waitFor();
+    const behind = Number((await page.locator('#behind').textContent()).match(/^(\d+)/)[1]);
+    if (!(behind > 0)) problems.push('no steps behind after the burst');
+    await shot(page, 'paced-behind.png');
+    const nOf = async () => Number((await page.locator('#scrub-label').textContent()).match(/^step (\d+)/)[1]);
+    const n0 = await nOf();
+    await page.waitForFunction((n) => Number(document.getElementById('scrub-label').textContent.match(/^step (\d+)/)[1]) !== n, n0, { timeout: 5000 });
+    const n1 = await nOf();
+    if (n1 !== n0 + 1) problems.push(`paced live skipped steps: ${n0} -> ${n1}`);
+    await page.locator('#latest').click();
     await page.waitForFunction(() => document.getElementById('scrub-label').textContent === 'step 309 of 309', null, { timeout: 10000 });
-    if (!(await page.locator('#follow').isChecked())) problems.push('follow live turned off during the burst');
+    if ((await page.locator('#mode-live').getAttribute('aria-pressed')) !== 'true') problems.push('Live turned off by Jump to latest');
     if (!(await page.locator('#reasoning').textContent()).startsWith('Run 3 note: Burst')) problems.push('burst reasoning pane');
     const current = await page.locator('#steplog button[aria-current="true"]').textContent();
     if (!current.startsWith('#309')) problems.push(`current log row: ${current}`);
@@ -196,6 +231,7 @@ try {
     page.on('request', (r) => { const m = r.url().match(/\/steps\?from=(\d+)/); if (m) stepFetches.push(Number(m[1])); });
     const hogs = new AbortController();
     await Promise.all(Array.from({ length: SSE_MAX_CLIENTS }, () => fetch(`${fast.url}/api/events`, { signal: hogs.signal })));
+    await page.locator('#interval').selectOption('100');
     for (let i = 0; i < 30; i++) await play('act', { run, action: 'ACTION6', x: i, y: 40, reasoning: `while away ${i + 1}` });
     await page.waitForFunction(() => document.getElementById('scrub-label').textContent === 'step 339 of 339', null, { timeout: 15000 });
     hogs.abort();

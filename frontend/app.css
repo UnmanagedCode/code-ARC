@@ -147,9 +147,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .hover { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; margin: 0.3rem 0; white-space: pre; }
 
 .scrubber { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-.scrubber input[type="range"] { flex: 1 1 8rem; accent-color: var(--primary); }
+.scrubber input[type="range"] { flex: 1 1 4rem; min-width: 4rem; accent-color: var(--primary); }
 .scrub-label { font-size: 0.78rem; min-width: 6rem; }
-.follow { font-size: 0.82rem; display: inline-flex; gap: 0.25rem; align-items: center; }
+.interval { font-size: 0.82rem; display: inline-flex; gap: 0.25rem; align-items: center; }
+.mode-switch { display: inline-flex; }
+.mode-switch button { border-radius: 0; }
+.mode-switch button:first-child { border-radius: var(--radius) 0 0 var(--radius); }
+.mode-switch button:last-child { border-radius: 0 var(--radius) var(--radius) 0; margin-left: -1px; }
+.mode-switch button[aria-pressed="true"] { border-color: var(--primary); background: var(--muted); }
+.live-status { display: flex; align-items: center; gap: 0.5rem; font-size: 0.78rem; }
+.behind { border: 1px solid var(--warning); border-radius: 999px; padding: 0.05rem 0.5rem; }
 
 .step-summary { font-size: 0.8rem; margin-bottom: 0.35rem; }
 .reasoning-text {

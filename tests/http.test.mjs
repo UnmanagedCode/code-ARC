@@ -145,6 +145,18 @@ test('session routes: list, get, paged steps bounded by STEPS_PAGE_MAX', async (
   assert.equal((await sendJsonReq(`${url}/api/sessions`, 'POST', {})).status, 405);
 });
 
+// Pins the contract Replay relies on: an ended session's steps stay readable.
+test("an ended session's steps stay readable for replay", async (t) => {
+  const { url, mcp } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
+  const sid = await startGame(mcp);
+  for (let i = 0; i < 3; i++) await mcp('act', { session_id: sid, action: 'ACTION6', x: i, y: 1 });
+  await mcp('end_session', { session_id: sid });
+  assert.notEqual((await json(`${url}/api/sessions/${sid}`)).body.status, 'live');
+  const steps = (await json(`${url}/api/sessions/${sid}/steps`)).body.steps;
+  assert.deepEqual(steps.map((x) => x.n), [0, 1, 2, 3]);
+  assert.ok(steps.every((x) => x.frame.length === 64));
+});
+
 test('status reports the toolkit and sidecar', async (t) => {
   const { url, mcp } = await startApp(t);
   await mcp('list_games');
