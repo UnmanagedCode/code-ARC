@@ -17,7 +17,7 @@ import { importBundle } from '../src/bundleImport.js';
 import { captureLog, FAKES, freshEnv, ROOT } from './_helpers.mjs';
 import { longWheelName, makeBundleDir, mkfifo, packDir, paxEntry, paxRecord, rawTar, ROOT_REQS, scriptedSpawn, settlesWithin, sha, snapshot, TARGET } from './_bundle.mjs';
 
-const FAKE_GAMES = ['fake-maze', 'fake-evil', 'fake-hang', 'fake-slow', 'fake-crash', 'fake-noisy', 'fake-429', 'fake-closed'];
+const FAKE_GAMES = ['fake-maze', 'fake-lose', 'fake-reset0', 'fake-evil', 'fake-hang', 'fake-slow', 'fake-crash', 'fake-noisy', 'fake-429', 'fake-closed'];
 const PIP_BYTES = Buffer.from('pip zipapp bytes for export');
 const PIP = { url: 'https://example.invalid/pip.pyz', sha256: sha(PIP_BYTES), version: PIP_VERSION };
 const pipFetch = async () => ({ ok: true, status: 200, body: [PIP_BYTES] });

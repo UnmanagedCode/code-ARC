@@ -92,6 +92,10 @@ class ClientTest(unittest.TestCase):
         self.assertEqual(g[5][7], 5)
         self.assertIsNone(Observation(obs_body(frame=None)).grid)
 
+    def test_allow_reset_defaults_true_and_maps_false(self):
+        self.assertIs(Observation(obs_body()).allow_reset, True)
+        self.assertIs(Observation({**obs_body(), "allow_reset": False}).allow_reset, False)
+
     def test_act_sends_run_and_coordinates(self):
         s = self.attach(run=4)
         self.fake.replies.append((200, obs_body(step=4, run=4)))

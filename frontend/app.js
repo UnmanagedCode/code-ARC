@@ -90,6 +90,7 @@ function renderHeader() {
     el('span', 'fact', `Mode: ${s.mode}`),
     el('span', 'fact muted', s.game_id),
   );
+  if (s.allow_reset === false) facts.append(el('span', 'fact', 'Resets: off (one run)'));
   const badges = el('div', 'badges');
   if (s.status === 'live') badges.append(badge(s.stalled ? 'Stalled: waiting for the toolkit' : 'Live', s.stalled ? 'status-stalled' : 'status-live'));
   else if (s.end_reason === 'scorecard_auto_closed') badges.append(badge('Scorecard auto-closed by arcprize.org (15 min idle)', 'status-warn'));

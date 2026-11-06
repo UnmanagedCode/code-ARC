@@ -14,7 +14,15 @@ import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT,
 import { createScriptAccess } from './scriptAccess.js';
 
 const SWEEP_MS = 60 * 1000;
-const FINISHED = new Set(['WIN', 'GAME_OVER']);
+export const FINISHED = new Set(['WIN', 'GAME_OVER']);
+export const resetAllowed = (meta) => meta.allow_reset !== false;
+// The actions a session offers: a one-run session never offers RESET and
+// offers nothing once finished.
+export function visibleActions(meta, obs) {
+  const list = obs.available_actions || [];
+  if (resetAllowed(meta)) return list;
+  return FINISHED.has(obs.state) ? [] : list.filter((n) => n !== 0);
+}
 // Codes the sidecar may answer that pass through to the agent unchanged.
 const PASS_THROUGH = new Set(['TOOLKIT_TIMEOUT', 'TOOLKIT_ERROR', 'SIDECAR_EXITED', 'NETWORK_ERROR', 'RATE_LIMITED', 'SCORECARD_CLOSED', 'GAME_UNKNOWN', 'INVALID_ARGUMENT', 'SESSION_BUSY', 'TOOLKIT_NOT_READY']);
 const REASONS = {
@@ -284,10 +292,11 @@ export function createSessions({
       return r.ok ? { ok: true, games: r.games } : r;
     },
 
-    async start({ game_id: gameId, online = false }, caller) {
+    async start({ game_id: gameId, online = false, allow_reset: allowReset = true }, caller) {
       const tk = toolkitGate();
       if (tk) return tk;
       if (typeof gameId !== 'string' || !GAME_ID_RE.test(gameId)) return refuse('INVALID_ARGUMENT', 'game_id is malformed');
+      if (typeof allowReset !== 'boolean') return refuse('INVALID_ARGUMENT', 'allow_reset must be a boolean');
       if (keyChanging) return refuse('TOOLKIT_NOT_READY', 'the API key is being changed; try again shortly', { state: 'reconfiguring' });
       if (liveCount() >= MAX_LIVE_SESSIONS) return refuse('TOO_MANY_SESSIONS', `at most ${MAX_LIVE_SESSIONS} live sessions; end_session one first`, { live: live().map((m) => m.id) });
       pendingStarts++;
@@ -323,6 +332,7 @@ export function createSessions({
           game_id: res.result.game_id || gameId,
           title,
           mode: online ? 'online' : 'local',
+          ...(allowReset ? {} : { allow_reset: false }),
           owner: { sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
           scorecard_id: card,
           scorecard_url: online ? scorecardUrl(card) : null,
@@ -377,9 +387,13 @@ export function createSessions({
       }
       if (reasoning !== undefined && (typeof reasoning !== 'string' || reasoning.length > REASONING_MAX_CHARS)) return refuse('INVALID_ARGUMENT', `reasoning must be a string of at most ${REASONING_MAX_CHARS} characters`);
       const { meta, r } = g;
-      if (FINISHED.has(meta.last.state)) return refuse('GAME_FINISHED', `the game is in ${meta.last.state}; only reset or end_session`, { state: meta.last.state });
+      if (FINISHED.has(meta.last.state)) {
+        const state = meta.last.state;
+        if (!resetAllowed(meta)) return refuse('GAME_FINISHED', `the game is in ${state} and this session was started with allow_reset:false: the run is over; call end_session`, { state, allow_reset: false });
+        return refuse('GAME_FINISHED', `the game is in ${state}; only reset or end_session`, { state });
+      }
       const n = Number(action.slice(6));
-      if (!meta.last.available_actions.includes(n)) return refuse('ACTION_UNAVAILABLE', `${action} is not available now`, { available_actions: meta.last.available_actions.map(actionName) });
+      if (!meta.last.available_actions.includes(n)) return refuse('ACTION_UNAVAILABLE', `${action} is not available now`, { available_actions: visibleActions(meta, meta.last).map(actionName) });
       const sg = stepGates(id, meta);
       if (sg) return sg;
       const rg = rateGate(meta, 1);
@@ -393,6 +407,7 @@ export function createSessions({
     async reset({ session_id: id, reasoning }, caller) {
       const g = gate(id, caller);
       if (g.refusal) return g.refusal;
+      if (!resetAllowed(g.meta)) return refuse('RESET_DISABLED', 'this session was started with allow_reset:false: one run, no resets; keep playing, or end_session once the run is over', { allow_reset: false });
       if (reasoning !== undefined && (typeof reasoning !== 'string' || reasoning.length > REASONING_MAX_CHARS)) return refuse('INVALID_ARGUMENT', `reasoning must be a string of at most ${REASONING_MAX_CHARS} characters`);
       const sg = stepGates(id, g.meta);
       if (sg) return sg;
@@ -475,7 +490,7 @@ export function createSessions({
         ok: true,
         scope,
         sessions: list.map((m) => ({
-          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, status: m.status, end_reason: m.end_reason,
+          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, ...(m.allow_reset === false ? { allow_reset: false } : {}), status: m.status, end_reason: m.end_reason,
           stalled: m.stalled, state: m.last?.state, levels_completed: m.last?.levels_completed, win_levels: m.last?.win_levels,
           step: m.step_count, owner: m.owner, updated_at: m.updated_at, ...(m.mode === 'online' ? { scorecard_url: m.scorecard_url } : {}),
         })),

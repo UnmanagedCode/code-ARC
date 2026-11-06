@@ -22,7 +22,8 @@
           "type": "object",
           "properties": {
             "game_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "A game_id from list_games (the base id before '-' also works)." },
-            "online": { "type": "boolean", "default": false, "description": "Play against arcprize.org with a real scorecard instead of locally." }
+            "online": { "type": "boolean", "default": false, "description": "Play against arcprize.org with a real scorecard instead of locally." },
+            "allow_reset": { "type": "boolean", "default": true, "description": "false: one run, no retries; reset is refused for the whole session." }
           },
           "required": ["game_id"],
           "additionalProperties": false
@@ -49,7 +50,7 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {

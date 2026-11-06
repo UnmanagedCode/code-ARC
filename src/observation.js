@@ -1,7 +1,7 @@
 // The observation fields both surfaces return for a session service result
 // {meta, obs, online}: the MCP tools add the title and the frame text, the
 // script routes add the raw frame rows.
-import { actionName } from './sessions.js';
+import { actionName, visibleActions } from './sessions.js';
 
 export function observationFields({ meta: s, obs, online }) {
   const out = {
@@ -9,11 +9,12 @@ export function observationFields({ meta: s, obs, online }) {
     session_id: s.id,
     game_id: s.game_id,
     mode: s.mode,
+    ...(s.allow_reset === false ? { allow_reset: false } : {}),
     status: s.status,
     state: obs.state,
     levels_completed: obs.levels_completed,
     win_levels: obs.win_levels,
-    available_actions: (obs.available_actions || []).map(actionName),
+    available_actions: visibleActions(s, obs).map(actionName),
     step: s.step_count,
     frame_count: obs.frame_count,
     full_reset: obs.full_reset,
