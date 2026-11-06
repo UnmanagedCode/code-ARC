@@ -9,12 +9,12 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | Tool | Arguments | Returns |
 |---|---|---|
 | `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded, source}]}}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; a failed game-list fetch is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list; with a bundle, a failed or slow web list degrades to the bundle's games instead of a refusal |
-| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`) | observation, first frame full, plus `meta.script` |
+| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation, first frame full, plus `meta.script` |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid` | observation from the stored last step; no toolkit call |
 | `end_session` | `session_id` | `{result:{ok, session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?}}` |
-| `list_sessions` | `scope` (`mine` default, `all`) | `{result:{ok, scope, sessions:[…]}}`, newest first, at most `LIST_SESSIONS_MAX` |
+| `list_sessions` | `scope` (`mine` default, `all`) | `{result:{ok, scope, sessions:[…]}}`, newest first, at most `LIST_SESSIONS_MAX`; an entry carries `allow_reset:false` when set |
 | `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a non-empty string equal to the owner's, so a null or empty caller is refused, and a session whose owner is null or empty can't be rotated by anyone |
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
@@ -30,10 +30,11 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | `ok` | `true` |
 | `session_id`, `game_id`, `title` | `game_id` is the toolkit's resolved, versioned id |
 | `mode` | `local` or `online` |
+| `allow_reset` | present, `false`, only on sessions started with `allow_reset:false` |
 | `status` | `live` or `ended` (`end_reason` present when ended) |
 | `state` | `NOT_PLAYED`, `NOT_FINISHED`, `WIN`, `GAME_OVER` |
 | `levels_completed`, `win_levels` | progress |
-| `available_actions` | e.g. `["ACTION1","ACTION6"]` |
+| `available_actions` | e.g. `["ACTION1","ACTION6"]`; on an `allow_reset:false` session never `RESET`, and `[]` in `WIN`/`GAME_OVER` |
 | `step` | `0` = start; increments per `act`/`reset` |
 | `frame_count` | frames the action produced (the text shows the last) |
 | `full_reset` | the last reset restarted the whole game |
@@ -78,7 +79,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 `{result:{ok:false, code, reason, …extra}}`. `{error}` is reserved for an unknown tool, a malformed envelope, or an internal exception.
 
-Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks. Schema refusals, and image options without `frame:"image"`, come before all of these.
+Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, and image options without `frame:"image"`, come before all of these.
 
 | Code | When | Extra fields |
 |---|---|---|
@@ -91,7 +92,8 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `TOO_MANY_SESSIONS` | `MAX_LIVE_SESSIONS` live | `live` (ids) |
 | `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it (with a bundle and no network, games outside the bundle are not listed: a local start of one gets a `detail` saying the web game list could not be fetched) | `detail` (bundle case only) |
 | `ACTION_UNAVAILABLE` | action not in `available_actions` | `available_actions` |
-| `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER` | `state` |
+| `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER`; on an `allow_reset:false` session the reason says the run is over (call `end_session`) | `state` (plus `allow_reset:false` on such a session) |
+| `RESET_DISABLED` | any `reset` (tool or script) on an `allow_reset:false` session; never sent, no step recorded, no rate budget spent (online included). A finished online run left live is closed by the idle sweep after `ONLINE_IDLE_CLOSE_MS`, so `end_session` promptly | `allow_reset:false` |
 | `TOOLKIT_NOT_READY` | venv still being checked/installed (or stopped); or, for `start_session`, an API key change in progress (`state:"reconfiguring"`) | `state`, `phase` |
 | `TOOLKIT_UNAVAILABLE` | venv install failed, or the offline bundle was rejected ([bundle.md](bundle.md)) | `detail` (≤ `DETAIL_MAX`), `fix` |
 | `DEPS_DIVERGED` | worktree's symlinked `.venv` doesn't match its `requirements.txt` | `detail`, `fix` |
@@ -133,7 +135,7 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 ### Session meta
 
-`{id, game_id, title, mode, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
+`{id, game_id, title, mode, allow_reset?, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
 
 ### Step
 

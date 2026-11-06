@@ -127,3 +127,18 @@ test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversi
   assert.equal(obs.text[0], 'no frame');
   assert.equal((await json(`${second.url}/api/health`)).status, 200);
 });
+
+test('allow_reset:false persists and survives a restart', async (t) => {
+  const env = await freshEnv(t);
+  const first = await startApp(t, { env });
+  const sid = await startGame(first.mcp, 'fake-maze', { allow_reset: false });
+  await first.close();
+
+  const second = await startApp(t, { env });
+  const meta = second.app.store.get(sid);
+  assert.equal(meta.allow_reset, false);
+  assert.equal(meta.end_reason, 'backend_restart');
+  const listed = (await second.mcp('list_sessions', { scope: 'all' })).result.sessions.find((s) => s.session_id === sid);
+  assert.equal(listed.allow_reset, false);
+  assert.equal((await second.mcp('observe', { session_id: sid })).meta.allow_reset, false);
+});

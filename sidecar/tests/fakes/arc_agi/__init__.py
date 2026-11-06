@@ -14,6 +14,7 @@ Games:
               (up/down/left/right, 2 frames each), ACTION6 paints a cell 8.
               Two levels: right x3 reaches the first goal, down x3 the second
               (WIN).
+  fake-lose   fake-maze, but ACTION3 (left) ends the game in GAME_OVER.
   fake-evil   fake-maze with a hostile title.
   fake-hang   step blocks forever.
   fake-slow   step answers after 0.4 s (a late reply).
@@ -144,6 +145,7 @@ class EnvironmentInfo:
 
 GAMES = {
     "fake-maze": ("Fake Maze", ["keyboard", "click"]),
+    "fake-lose": ("Fake Lose", ["keyboard"]),
     "fake-evil": ("Evil <img src=x onerror=alert(1)>", ["click"]),
     "fake-hang": ("Fake Hang", []),
     "fake-slow": ("Fake Slow", []),
@@ -292,6 +294,8 @@ class _Wrapper:
                 g.player = (2, 2)
                 if g.level == len(GOALS):
                     g.state = GameState.WIN
+            if gid == "fake-lose" and action.value == 3 and g.state == GameState.NOT_FINISHED:
+                g.state = GameState.GAME_OVER
             return self._obs([mid, g.grid()], action_input=ai)
         if action == GameAction.ACTION6:
             g.paint[(int(data["x"]), int(data["y"]))] = PAINT

@@ -64,6 +64,7 @@ class Observation:
         self.frame_count = raw.get("frame_count")
         self.full_reset = raw.get("full_reset")
         self.online = raw.get("online")
+        self.allow_reset = raw.get("allow_reset", True)
         frame = raw.get("frame")
         self.grid = None if frame is None else [[int(c, 16) for c in row] for row in frame]
 

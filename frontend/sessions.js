@@ -42,6 +42,7 @@ export function renderSessions(listEl, emptyEl, sessions, selectedId, onSelect) 
     const title = el('span', 'session-title', s.title || s.game_id);
     const badges = el('span', 'badges');
     badges.append(el('span', `badge mode-${s.mode}`, s.mode));
+    if (s.allow_reset === false) badges.append(el('span', 'badge no-reset', 'No reset'));
     const status = s.status === 'live' ? (s.stalled ? 'Stalled' : 'Live') : END_REASONS[s.end_reason] || 'Ended';
     badges.append(el('span', `badge status-${s.status === 'live' ? (s.stalled ? 'stalled' : 'live') : 'ended'}`, status));
     const meta = el('span', 'session-meta muted', `${s.game_id} · step ${Math.max(0, s.step_count)} · ${s.last?.state ?? ''}`);

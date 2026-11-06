@@ -5,6 +5,7 @@
 //   settings.png       key saved, shown masked
 //   evil.png           a hostile game title rendered as text
 //   closed.png         an online session whose scorecard was closed
+//   no-reset.png       a one-run session after GAME_OVER: list badge and header fact
 //   deeplink.png       ?session=&step= routing
 //   dark.png           OS dark theme (standalone fallback tokens)
 //   banner.png         toolkit banner for a diverged venv, with its fix
@@ -43,6 +44,9 @@ try {
   const closed = (await mcp(srv.url, 'start_session', { game_id: 'fake-closed', online: true })).meta.session_id;
   const closedAct = await mcp(srv.url, 'act', { session_id: closed, action: 'ACTION1' });
   if (closedAct.result?.code !== 'SCORECARD_CLOSED') throw new Error(`expected SCORECARD_CLOSED, got ${JSON.stringify(closedAct)}`);
+  const lose = (await mcp(srv.url, 'start_session', { game_id: 'fake-lose', allow_reset: false })).meta.session_id;
+  const over = await mcp(srv.url, 'act', { session_id: lose, action: 'ACTION3', reasoning: 'One run: trying left.' });
+  if (over.meta?.state !== 'GAME_OVER') throw new Error(`expected GAME_OVER, got ${JSON.stringify(over)}`);
 
   await withPage(async (page) => {
     page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
@@ -90,6 +94,7 @@ try {
     await shot(page, 'settings-409.png');
     await mcp(srv.url, 'end_session', { session_id: maze });
     await mcp(srv.url, 'end_session', { session_id: evil }, { sessionId: null, project: null });
+    await mcp(srv.url, 'end_session', { session_id: lose });
     await page.getByLabel('ARC API key').fill('harness-key-0123456789abcd');
     await page.getByRole('button', { name: 'Save' }).click();
     await page.getByText('Key set: ••••abcd').waitFor();
@@ -111,6 +116,13 @@ try {
     if ((await link.getAttribute('rel')) !== 'noopener noreferrer') problems.push('scorecard link rel');
     if (!(await link.getAttribute('href')).startsWith('https://arcprize.org/scorecards/')) problems.push('scorecard link href');
     await shot(page, 'closed.png');
+
+    // One-run session: badge in the list, fact in the header.
+    await page.getByRole('button', { name: /Fake Lose/ }).click();
+    await page.locator('.fact', { hasText: 'Resets: off (one run)' }).waitFor();
+    await page.locator('.badge.no-reset', { hasText: 'No reset' }).first().waitFor();
+    await page.locator('#steplog button', { hasText: 'ACTION3' }).waitFor();
+    await shot(page, 'no-reset.png');
 
     // Deep link to a step.
     await page.goto(`${srv.url}/?session=${maze}&step=3`);
