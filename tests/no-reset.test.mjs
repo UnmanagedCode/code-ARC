@@ -131,3 +131,18 @@ test('list_sessions and api/sessions surface allow_reset:false', async (t) => {
   assert.equal(listed.allow_reset, false);
   assert.equal((await json(`${url}/api/sessions/${sid}`)).body.allow_reset, false);
 });
+
+test('a one-run session never lists RESET while unfinished, even when the toolkit reports it; a default session still does', async (t) => {
+  const { mcp } = await startApp(t, FAST);
+  const oneRun = await mcp('start_session', { game_id: 'fake-reset0', allow_reset: false });
+  assert.equal(oneRun.meta.state, 'NOT_FINISHED');
+  assert.deepEqual(oneRun.meta.available_actions, ['ACTION1', 'ACTION2', 'ACTION3', 'ACTION4', 'ACTION6']);
+  const refused = (await mcp('act', { session_id: oneRun.meta.session_id, action: 'ACTION5' })).result;
+  assert.equal(refused.code, 'ACTION_UNAVAILABLE');
+  assert.deepEqual(refused.available_actions, ['ACTION1', 'ACTION2', 'ACTION3', 'ACTION4', 'ACTION6']);
+
+  const normal = await mcp('start_session', { game_id: 'fake-reset0' });
+  assert.ok(normal.meta.available_actions.includes('RESET'));
+  const normalRefused = (await mcp('act', { session_id: normal.meta.session_id, action: 'ACTION5' })).result;
+  assert.ok(normalRefused.available_actions.includes('RESET'));
+});

@@ -15,6 +15,7 @@ Games:
               Two levels: right x3 reaches the first goal, down x3 the second
               (WIN).
   fake-lose   fake-maze, but ACTION3 (left) ends the game in GAME_OVER.
+  fake-reset0 fake-maze, but its available_actions also list 0 (RESET).
   fake-evil   fake-maze with a hostile title.
   fake-hang   step blocks forever.
   fake-slow   step answers after 0.4 s (a late reply).
@@ -146,6 +147,7 @@ class EnvironmentInfo:
 GAMES = {
     "fake-maze": ("Fake Maze", ["keyboard", "click"]),
     "fake-lose": ("Fake Lose", ["keyboard"]),
+    "fake-reset0": ("Fake Reset0", ["keyboard"]),
     "fake-evil": ("Evil <img src=x onerror=alert(1)>", ["click"]),
     "fake-hang": ("Fake Hang", []),
     "fake-slow": ("Fake Slow", []),
@@ -212,7 +214,7 @@ class _Wrapper:
         o.state = self.game.state
         o.levels_completed = self.game.level
         o.win_levels = len(GOALS)
-        o.available_actions = [1, 2, 3, 4, 6]
+        o.available_actions = [0, 1, 2, 3, 4, 6] if self.behaviour == "fake-reset0" else [1, 2, 3, 4, 6]
         o.full_reset = full_reset
         o.frame = frames
         o.guid = "guid-" + self.scorecard_id
