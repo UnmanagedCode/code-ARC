@@ -125,6 +125,8 @@ test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversi
   // The tail is tampered: the session has no last frame, and still observes.
   const obs = await second.mcp('observe', { session_id: sid });
   assert.deepEqual(ok(obs).frame, { mode: 'full', rows: null });
+  // Pins: the text view says no frame is stored (rather than silently omitting the frame).
+  assert.match((await second.mcpText('observe', { session_id: sid })).text, /No frame stored\./);
   assert.equal((await json(`${second.url}/api/health`)).status, 200);
 });
 

@@ -269,9 +269,10 @@ test('ended sessions get no image', async (t) => {
   ok(await mcp('observe', { session_id: sid, frame: 'full' }));
 });
 
+// Pins: the text view tells the agent the image could not be written and why.
 test('a failed image write never fails the action', async (t) => {
   const log = captureLog();
-  const { mcp, env } = await startApp(t, { log });
+  const { mcp, mcpText, env } = await startApp(t, { log });
   const sid = await startGame(mcp);
   // A regular file where the session's image dir goes: the write fails.
   await fs.writeFile(path.join(env.dataDir, 'images', sid), 'not a dir');
@@ -281,6 +282,8 @@ test('a failed image write never fails the action', async (t) => {
   assert.equal(r.frame.path, undefined);
   assert.match(r.frame.error, /not a real directory/);
   assert.match(log.text(), /board image for s-/);
+  const text = (await mcpText('observe', { session_id: sid, frame: 'image' })).text;
+  assert.match(text, /No image: it could not be written \(error: .*not a real directory.*\)\. The action still happened\./);
 });
 
 test('server and client agree end to end on one session image', async (t) => {
@@ -298,8 +301,9 @@ test('server and client agree end to end on one session image', async (t) => {
   assert.ok(rgbOf(client).equals(rgbOf(server)));
 });
 
+// Pins: the text view says there is no image because no frame is stored.
 test('frame:image with no stored frame reports unavailable no_frame and writes nothing', async (t) => {
-  const { mcp, app, env } = await startApp(t);
+  const { mcp, mcpText, app, env } = await startApp(t);
   const sid = await startGame(mcp);
   // The toolkit answers this step without a frame.
   const call = app.sidecar.call;
@@ -311,11 +315,13 @@ test('frame:image with no stored frame reports unavailable no_frame and writes n
   const r = ok(await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' }));
   assert.equal(r.step, 1);
   assert.deepEqual(r.frame, { mode: 'image', unavailable: 'no_frame' });
+  assert.match((await mcpText('act', { session_id: sid, action: 'ACTION4', frame: 'image' })).text, /No image: no frame stored\./);
   assert.deepEqual(await fs.readdir(path.join(env.dataDir, 'images')), []);
 });
 
+// Pins: the text view says the session ended during the call (no image written).
 test('a session that ends during an image call reports unavailable session_ended', async (t) => {
-  const { mcp, app, env } = await startApp(t);
+  const { mcp, mcpText, app, env } = await startApp(t);
   const sid = await startGame(mcp);
   // The session ends after the act is recorded, before its image is written.
   const act = app.sessions.act;
@@ -327,6 +333,8 @@ test('a session that ends during an image call reports unavailable session_ended
   const r = ok(await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' }));
   assert.equal(r.step, 1, 'the action is recorded');
   assert.deepEqual(r.frame, { mode: 'image', unavailable: 'session_ended' });
+  const sid2 = await startGame(mcp);
+  assert.match((await mcpText('act', { session_id: sid2, action: 'ACTION4', frame: 'image' })).text, /No image: the session ended during the call\./);
   assert.equal(app.store.get(sid).status, 'ended');
   assert.deepEqual(await fs.readdir(path.join(env.dataDir, 'images')), []);
 });
