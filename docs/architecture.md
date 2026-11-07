@@ -25,12 +25,13 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `src/proc.js` | Child runner shared by the bootstrap and export: deadlines, process-group kill, `stopAll`, captured stdout |
 | `src/sidecar.js` | Owns the Python child: spawn, protocol, deadlines, late replies, redaction, respawn |
 | `src/sessions.js` | Session service: lifecycle, ownership and script-token gating, online and step limits, runs and notes, idle sweep, SSE publishing |
-| `src/mcp.js` | Tool handlers, schema validation against the manifest, result shaping |
+| `src/mcp.js` | Tool handlers: format dispatch (`json`/`text`), schema validation against the manifest, refusal → `{error, code, details}`, view pairs (only the requested view is built) |
+| `src/toolText.js` | The text view: prose renderers over the json data, `list_sessions` text paging |
 | `src/schema.js` | `validate`: the flat schema subset, shared by the MCP handlers and the script routes |
-| `src/observation.js` | `observationFields`: the observation fields both surfaces return (MCP adds title and frame text, scripts the raw rows) |
+| `src/observation.js` | `observationFields`: the observation fields both surfaces return (MCP adds title and frame, scripts the raw rows; MCP json drops `ok`) |
 | `src/scriptAccess.js` | In-memory script tokens (sha256, constant-time verify) and runs per session; no I/O |
 | `src/scriptRoutes.js` | `POST api/play/:id/<op>` ([script-api.md](script-api.md)): script guard, bearer parse, pre-schema session/token gate (`sessions.admitScript`), per-op schemas, result shaping |
-| `src/frames.js` | Frame text (full / diff) |
+| `src/frames.js` | Frame text (full / diff) and the json frame data (`diffRows`, `frameData`) |
 | `src/png.js` | `encodePng`: minimal PNG encoder (RGB, filter 0, one IDAT, table CRC); knows nothing about ARC |
 | `src/boardImage.js` | `renderBoard` / `boardPng`: frame rows → board image pixels by the rules in [protocol.md](protocol.md) → Board image; `IMAGE_SPEC` (the parsed spec, validated at load) |
 | `src/boardImages.js` | `createBoardImages`: board image files of live sessions (`write`, `prune`, `init`); per-session serialised, latest only, path-checked |
@@ -43,7 +44,7 @@ agent script (clients/code_arc.py) ─127.0.0.1:<port>/api/play/─▶ same back
 | `sidecar/bundle_games.py` | Export helper (never run by the backend): downloads every listed game into a bundle's `games/` |
 | `scripts/bundle.mjs` | Bundle CLI: `export`, `import` |
 | `frontend/` | Vanilla ES modules, no build: `app.js` (state, routing, SSE), `playback.js` (`createPlayback`: the shown step and Live/Replay mode, injected clock, no DOM), `grid.js`, `sessions.js`, `steplog.js`, `runs.js` (pure script-run helpers), `settings.js`, `palette.js`, `safeHref.js`, `api.js` |
-| `clients/code_arc.py` | Stdlib-only Python client for the script HTTP API, handed to agents as `meta.script.client` |
+| `clients/code_arc.py` | Stdlib-only Python client for the script HTTP API, handed to agents as `script.client` from `start_session` |
 | `claude/` | Claude Code plugin with the `play-arc` skill |
 
 ## Lifecycle
@@ -105,6 +106,7 @@ bundle/                      the imported offline bundle (bundle.md); read-only 
 
 - `npm test` = `node tests/run.mjs` (node:test API, files serial) + `python3 -I -m unittest discover -s sidecar/tests -t .` + the same for `clients/tests` (the client against a threaded `http.server` fake). No network.
 - Scripted play: `tests/script.test.mjs` (the HTTP contract, runs, auth, limits, token secrecy), `tests/scriptClient.test.mjs` (spawns `python3 -I tests/fixtures/client_driver.py` against `startApp`). The `stepRate` seam on `createApp` (`{max, windowMs}`) lifts the per-session step rate for tests that act back to back.
+- MCP formats: `tests/mcp-formats.test.mjs` covers every tool in both formats (refusal parity, `format` dispatch, `list_sessions` paging, frame content). The `mcp` helper from `startApp` sends `format:'json'` and returns the raw reply; unwrap it with `ok(r)` (asserts the reply is exactly `{structured}` and validates it against the manifest `outputSchema`) or `refusal(r, code)`; `mcpText` sends `format:'text'`. `tests/_jsonSchemaSubset.mjs` is a test-only port of cc's `checkSchema`/`validate`.
 - Node tests run the **real sidecar** on the system `python3` against the **fake toolkit** in `sidecar/tests/fakes/` (`CODE_ARC_PYTHON=python3`, `CODE_ARC_TEST_TOOLKIT_DIR`). The fake mirrors the toolkit's signatures and failure shapes, records every call to `<data>/toolkit/calls.jsonl` (the key as its sha256), and ships games that hang, crash, print, rate-limit, lose their scorecard or end in GAME_OVER (`fake-lose`).
 - Each test gets a fresh data dir and projects root (`freshEnv` in `tests/_helpers.mjs`); clocks, timers, deadlines, the online limit, spawn and fetch are injected through `createApp`.
 - Offline bundle: `tests/_bundle.mjs` builds bundle dirs with real hashes, archives (also malformed ones) and a refusing fetch spy. The fake toolkit logs every request it would send to `<data>/toolkit/net.jsonl` (`{path, mode, ok}`) and fails them all while `<data>/toolkit/fake-net-down` exists; its OFFLINE mode scans a games dir and records `load_source`. `tests/bundle-boot.test.mjs` boots whole apps on that switch.

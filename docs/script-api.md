@@ -4,7 +4,7 @@ Contracts for scripted play: the routes an agent's Python script calls, and the 
 
 Same session service as the MCP tools: the same gating, refusal codes, step log and SSE events. Script steps are recorded with `source:"script"` and the run they belong to.
 
-**Where:** `meta.script` from `start_session` (or `script_access`'s result) = `{base_url, token, client}`.
+**Where:** the `script` block of `start_session`'s (or `script_access`'s) result = `{base_url, token, client}`.
 
 - `base_url` = the backend's own address, `http://127.0.0.1:<port>/api/play/<session_id>/` (not cc's proxy). The port changes only when the plugin restarts, which ends every session anyway.
 - `client` = the absolute path of `clients/code_arc.py` in the plugin checkout.
@@ -31,8 +31,8 @@ A session id that isn't `s-` + 12 hex digits is 404 `SESSION_UNKNOWN`; a well-fo
 
 - **Runs:** a run is the segment opened by one note. `attach` opens run `k`; `note` opens `k+1`. `act`/`reset`/`note` must name the current run: none open → `NOTE_REQUIRED`, an older one → `RUN_SUPERSEDED`. Runs never expire; tool steps in between don't end one. `script_access` closes the current run (run numbers keep counting).
 - **Board images:** the script routes have no image option; a script renders locally with `Observation.save_png`.
-- **Observation** (200): `{ok:true, session_id, game_id, mode, allow_reset?, status, end_reason?, state, levels_completed, win_levels, available_actions:["ACTIONn"…], step, frame_count, full_reset, frame:[hex rows]|null, online?, run?}`: the MCP `meta` fields minus `title` and the frame-text `frame` mode, with the raw rows.
-- **Refusal** (200): `{ok:false, code, reason, …extra}` with the MCP codes. `TOKEN_INVALID` is HTTP 401 with the same body.
+- **Observation** (200): `{ok:true, session_id, game_id, mode, allow_reset?, status, end_reason?, state, levels_completed, win_levels, available_actions:["ACTIONn"…], step, frame_count, full_reset, frame:[hex rows]|null, online?, run?}`: the MCP observation fields minus `title`, with `frame` as the raw rows (MCP json's `frame` is an object).
+- **Refusal** (200): `{ok:false, code, reason, …extra}` with the MCP codes; the extras stay flat here, while MCP nests them under `details`. `TOKEN_INVALID` is HTTP 401 with the same body.
 - **Router errors** keep the `{error, code}` shape: 400 `BAD_JSON`, 413 `BODY_TOO_LARGE`, 415, 403 `CROSS_SITE`, 404, 405.
 
 **Gating order:**
@@ -48,7 +48,7 @@ The token replaces ownership: a script call is never `NOT_OWNER`. Tool callers a
 
 ## Python client (`clients/code_arc.py`)
 
-Stdlib only, Python ≥ 3.8; import it from the directory of `meta.script.client`. Usage example in its module docstring. `save_png` reads `board_image.json` from the client's own directory: the two files must stay side by side.
+Stdlib only, Python ≥ 3.8; import it from the directory of `script.client`. Usage example in its module docstring. `save_png` reads `board_image.json` from the client's own directory: the two files must stay side by side.
 
 | Name | Behaviour |
 |---|---|

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { json, ROOT, startApp } from './_helpers.mjs';
+import { json, ok, ROOT, startApp } from './_helpers.mjs';
 import { STEP_RATE_MAX, STEP_RATE_WINDOW_MS } from '../src/limits.js';
 
 const run = promisify(execFile);
@@ -19,7 +19,8 @@ async function drive(script, scenario) {
 
 async function scripted(mcp) {
   const r = await mcp('start_session', { game_id: 'fake-maze' });
-  return { sid: r.meta.session_id, script: r.meta.script };
+  const s = ok(r);
+  return { sid: s.session_id, script: s.script };
 }
 
 test('grid is 64x64 ints equal to the stored step frame', async (t) => {

@@ -1,21 +1,35 @@
 # Protocol
 
-Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, SSE events and the sidecar protocol. The script HTTP API and its Python client: [script-api.md](script-api.md). Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool schemas live in `conductor.plugin.json`.
+Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, SSE events and the sidecar protocol. The script HTTP API and its Python client: [script-api.md](script-api.md). Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool input and output schemas live in `conductor.plugin.json` (`inputSchema`, `outputSchema`).
 
 ## MCP tools
 
-cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{sessionId, project}}` to `POST /api/mcp`. Every well-formed call answers HTTP 200. Arguments are validated by cc against the manifest schema and again by the backend against the same schema (`validate` in `src/schema.js`).
+cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{sessionId, project}, format}` to `POST /api/mcp`. Every well-formed call answers HTTP 200. Arguments are validated by cc against the manifest schema and again by the backend against the same schema (`validate` in `src/schema.js`).
 
-| Tool | Arguments | Returns |
+**Formats.** `format` is `json` or `text`; the reply is one of:
+
+| Reply | Shape |
+|---|---|
+| json success | `{structured}` only: the complete data, validated by cc against the tool's manifest `outputSchema` (scripts and the REST alias read this) |
+| text success | `{text}` only: one prose string (no `meta`), for agents; field names (`state`, `levels_completed`, `available_actions`, `frame_count`, `changed_cells`, `bbox`, …) appear verbatim |
+| refusal, either format | `{error, code, details?}`: see [Refusals](#refusals) |
+
+Dispatch (`handle` in `src/mcp.js`) checks, in order: envelope (malformed → `INVALID_ARGUMENT`), `format` (absent → treated as `text`; present but not `json`/`text` → `INVALID_ARGUMENT`, before any work), tool (unknown → `TOOL_UNKNOWN`), arguments (schema violation → `INVALID_ARGUMENT`), then the handler (a thrown exception → `INTERNAL`, logged; the message names only the tool). The json view never carries an `ok` field. Only the requested view is built.
+
+The tables below give each tool's json `structured` fields; the text view of each is a prose rendering of the same data (`src/toolText.js`). The one text-only bound: `list_sessions` text pages.
+
+| Tool | Arguments | `structured` (json view) |
 |---|---|---|
-| `list_games` | — | `{result:{ok, games:[{game_id, title, tags, downloaded, source}]}}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; a failed game-list fetch is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list; with a bundle, a failed or slow web list degrades to the bundle's games instead of a refusal |
-| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation, first frame full, plus `meta.script` |
+| `list_games` | — | `{games:[{game_id, title, tags, downloaded, source}], web_unavailable?}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; `web_unavailable: {code, detail}` is present when, with a bundle, the web game list failed or is still loading (the text view says only the bundle's games are listed); a failed game-list fetch without a bundle is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
+| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation (first frame full) plus `script` |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid` | observation from the stored last step; no toolkit call |
-| `end_session` | `session_id` | `{result:{ok, session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?}}` |
-| `list_sessions` | `scope` (`mine` default, `all`) | `{result:{ok, scope, sessions:[…]}}`, newest first, at most `LIST_SESSIONS_MAX`; an entry carries `allow_reset:false` when set |
-| `script_access` | `session_id` | `{result:{ok, session_id, script}}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a non-empty string equal to the owner's, so a null or empty caller is refused, and a session whose owner is null or empty can't be rotated by anyone |
+| `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
+| `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry carries `allow_reset:false` when set. json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
+| `script_access` | `session_id` | `{session_id, script}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a non-empty string equal to the owner's, so a null or empty caller is refused, and a session whose owner is null or empty can't be rotated by anyone |
+
+Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `script_access` and `start_session` → a `base_url · token · client` line (the only places the token appears, in both formats).
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
 - `mine` = sessions whose owner `sessionId` equals the caller's (both `null` counts as equal).
@@ -23,11 +37,10 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 ### Observation result
 
-`{text: [<frame text>], meta}`; cc renders `meta` as a compact JSON block followed by the raw frame text. With `frame:"image"` the text is empty and the image is a file (`meta.frame.path`): a result never carries image bytes.
+json: `structured` is the object below. text: the same data as prose: a header line (`Session <id>: <game_id> "<title>" (<mode>, <status>)`), `state … · levels_completed a/b · step n`, `available_actions: …`, conditional lines (`allow_reset: false`, `full_reset`, `status ended (end_reason …)`, `online: scorecard_url … · idle_close_at …`), `frame_count n`, a frame line, then the labelled grid ([Frame text](#frame-text)). With `frame:"image"` the text gives `Board image: <path>, open it with Read.` (or why there is none) and the image is a file: a result never carries image bytes.
 
-| `meta` field | Meaning |
+| `structured` field | Meaning |
 |---|---|
-| `ok` | `true` |
 | `session_id`, `game_id`, `title` | `game_id` is the toolkit's resolved, versioned id |
 | `mode` | `local` or `online` |
 | `allow_reset` | present, `false`, only on sessions started with `allow_reset:false` |
@@ -36,22 +49,24 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 | `levels_completed`, `win_levels` | progress |
 | `available_actions` | e.g. `["ACTION1","ACTION6"]`; on an `allow_reset:false` session never `RESET`, and `[]` in `WIN`/`GAME_OVER` |
 | `step` | `0` = start; increments per `act`/`reset` |
-| `frame_count` | frames the action produced (the text shows the last) |
+| `frame_count` | frames the action produced (only the last is shown) |
 | `full_reset` | the last reset restarted the whole game |
-| `frame` | `{mode:"full"}`, `{mode:"full", auto_full:true}`, `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null}`, `{mode:"none"}`, or for `frame:"image"`: `{mode:"image", path}` (absolute path of the PNG), `{mode:"image"}` with text `no frame` (no frame stored) or `no image: the session ended` (it ended during the call), or `{mode:"image", error}` (the file could not be written; the action still happened). `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
+| `frame` | by `mode`: `{mode:"full", rows}` (`rows`: hex row strings, `null` with no stored frame; plus `auto_full:true` when a `diff` was asked and there was no previous frame to compare); `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null, changed_rows:[{y, row}]}` (every changed row, however many); `{mode:"none"}`; for `frame:"image"`: `{mode:"image", path}` (absolute path of the PNG), `{mode:"image", unavailable:"no_frame"}` (no frame stored), `{mode:"image", unavailable:"session_ended"}` (it ended during the call), or `{mode:"image", error}` (the file could not be written; the action still happened). `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
 | `online` | online sessions: `{scorecard_url, idle_close_at}` (ISO time) |
 | `script` | `start_session` only: `{base_url, token, client}` (see [script-api.md](script-api.md)); no other observation carries it |
+
+The observation schema is written out in each of `act`, `reset`, `observe` and `start_session` (the manifest has no `$ref`); `tests/manifest.test.mjs` pins the copies equal. Toolkit-sourced numbers are typed `number` and `state` a plain string, so a toolkit value never makes cc reject a reply (`PLUGIN_REPLY_INVALID`).
 
 ### Frame text
 
 - Two header lines: `xx|` + each column's tens digit, then `xx|` + its units digit. No line starts with whitespace; column `x` is at index `3 + x` on every line.
 - Each row: `yy|` + one hex digit per cell = the palette index (`0`–`f`). `x` = column, `y` = row, origin top-left.
-- `diff`: the header plus only changed rows (full row content). No change → `no cells changed`. More than `DIFF_MAX_ROWS` changed rows, or no comparable previous frame → sent full with `auto_full:true`.
-- No frame → `no frame`; `frame:"none"` → empty text.
+- `diff`: the header plus only changed rows (full row content). No change → `no cells changed`. More than `DIFF_MAX_ROWS` changed rows, or no comparable previous frame → sent full with `auto_full`. `DIFF_MAX_ROWS` is a text-view bound only: the json `diff` frame always lists every changed row (`frameData` in `src/frames.js`).
+- No frame → the observation text says `No frame stored.`; `frame:"none"` → no frame line and no grid.
 
 ### Board image
 
-`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and returns its absolute path in `meta.frame.path`; the agent opens it with its Read tool. Names written as `palette`, `scale.*` and `grid.*` below are keys of `clients/board_image.json`, the single source for the image's numbers and colours, read by both `src/boardImage.js` and `Observation.save_png` in `clients/code_arc.py`. `FRAME_SIDE` is the largest frame side, `COORD_MAX + 1` from `src/limits.js` (the Python client checks the same bound).
+`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and gives its absolute path (`frame.path` in json, named in the text); the agent opens it with its Read tool. Names written as `palette`, `scale.*` and `grid.*` below are keys of `clients/board_image.json`, the single source for the image's numbers and colours, read by both `src/boardImage.js` and `Observation.save_png` in `clients/code_arc.py`. `FRAME_SIDE` is the largest frame side, `COORD_MAX + 1` from `src/limits.js` (the Python client checks the same bound).
 
 | Option | Values | Default |
 |---|---|---|
@@ -62,7 +77,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 - Live sessions only: `observe` with `frame:"image"` on an ended session → `SESSION_ENDED` (`frame:"full"` still works).
 - Largest image: `grid.margin + FRAME_SIDE·scale.max` pixels a side.
 
-**File lifecycle:** `<data dir>/images/<sid>/step-<n>-<seq>.png` (0600, dirs 0700), `n` = the observation's `step`, `seq` = a per-session counter, so every image has a path of its own (a reader never gets a cached older copy). Only the newest file per session is kept: each write unlinks the one file the backend wrote before it, nothing else. `images/` and each session dir must be real directories (a symlink or other file in their place makes the write fail with `meta.frame.error`, writing nothing and changing no mode), and a session dir's realpath must sit directly under `images/`'s. The session's dir is removed when the session ends (every end path) and all of `images/` when the backend starts.
+**File lifecycle:** `<data dir>/images/<sid>/step-<n>-<seq>.png` (0600, dirs 0700), `n` = the observation's `step`, `seq` = a per-session counter, so every image has a path of its own (a reader never gets a cached older copy). Only the newest file per session is kept: each write unlinks the one file the backend wrote before it, nothing else. `images/` and each session dir must be real directories (a symlink or other file in their place makes the write fail with `frame.error`, writing nothing and changing no mode), and a session dir's realpath must sit directly under `images/`'s. The session's dir is removed when the session ends (every end path) and all of `images/` when the backend starts.
 
 **Pixel rules** (PNG: 8-bit RGB, colour type 2, no alpha, not interlaced, filter 0 on every row). `rows` = H×W hex rows, 1 ≤ H, W ≤ `FRAME_SIDE`, rectangular; `s` = scale; `g` = grid on; `M = g ? grid.margin : 0`.
 
@@ -77,11 +92,11 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 ### Refusals
 
-`{result:{ok:false, code, reason, …extra}}`. `{error}` is reserved for an unknown tool, a malformed envelope, or an internal exception.
+`{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw). The script API keeps the extras flat beside `reason` ([script-api.md](script-api.md)); only MCP nests them.
 
 Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, and image options without `frame:"image"`, come before all of these.
 
-| Code | When | Extra fields |
+| Code | When | `details` keys |
 |---|---|---|
 | `INVALID_ARGUMENT` | schema violation; ACTION6 without `x`/`y`, or `x`/`y` on another action; `image_scale`/`image_grid` without `frame:"image"`; `reasoning` over the toolkit's byte bound as the toolkit measures it (ASCII-escaped JSON; double-encoded online) | `detail` (sidecar checks) |
 | `SESSION_UNKNOWN` | no such session | |

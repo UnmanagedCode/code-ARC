@@ -7,7 +7,7 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import {
-  ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, LIST_SESSIONS_MAX, MAX_LIVE_SESSIONS, NOTE_MAX_CHARS, NOTES_MAX,
+  ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, MAX_LIVE_SESSIONS, NOTE_MAX_CHARS, NOTES_MAX,
   REASONING_MAX_CHARS, SESSION_STEPS_MAX, STEP_RATE_MAX, STEP_RATE_WINDOW_MS,
 } from './limits.js';
 import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT, scorecardUrl } from './online.js';
@@ -289,7 +289,7 @@ export function createSessions({
 
     async listGames() {
       const r = await knownGames(true);
-      return r.ok ? { ok: true, games: r.games } : r;
+      return r.ok ? { ok: true, games: r.games, ...(r.webUnavailable ? { web_unavailable: r.webUnavailable } : {}) } : r;
     },
 
     async start({ game_id: gameId, online = false, allow_reset: allowReset = true }, caller) {
@@ -483,12 +483,16 @@ export function createSessions({
       return out;
     },
 
-    listSessions({ scope = 'mine' } = {}, caller) {
+    // Every session in scope from `offset` on, newest first; `total` counts the
+    // whole scope. Paging a long list is the text view's concern (src/toolText.js).
+    listSessions({ scope = 'mine', offset = 0 } = {}, caller) {
       const who = caller?.sessionId ?? null;
-      const list = store.list().filter((m) => scope === 'all' || (m.owner?.sessionId ?? null) === who).slice(0, LIST_SESSIONS_MAX);
+      const all = store.list().filter((m) => scope === 'all' || (m.owner?.sessionId ?? null) === who);
+      const list = all.slice(offset);
       return {
         ok: true,
         scope,
+        total: all.length,
         sessions: list.map((m) => ({
           session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, ...(m.allow_reset === false ? { allow_reset: false } : {}), status: m.status, end_reason: m.end_reason,
           stalled: m.stalled, state: m.last?.state, levels_completed: m.last?.levels_completed, win_levels: m.last?.win_levels,

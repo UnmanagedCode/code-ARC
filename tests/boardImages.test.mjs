@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createBoardImages } from '../src/boardImages.js';
-import { captureLog, freshEnv, startApp, startGame } from './_helpers.mjs';
+import { captureLog, freshEnv, ok, startApp, startGame } from './_helpers.mjs';
 
 const SID = 's-0123456789ab';
 const ROWS = ['0123', '4567', '89ab', 'cdef'];
@@ -114,13 +114,13 @@ test('every end path prunes the session image: end_session and sidecar exit', as
 
   const a = await startGame(mcp);
   const r = await mcp('act', { session_id: a, action: 'ACTION4', frame: 'image' });
-  assert.equal(await exists(r.meta.frame.path), true);
-  assert.equal((await mcp('end_session', { session_id: a })).result.ok, true);
+  assert.equal(await exists(ok(r).frame.path), true);
+  ok(await mcp('end_session', { session_id: a }));
   assert.equal(await exists(path.join(dir, a)), false);
 
   const b = await startGame(mcp);
   const o = await mcp('observe', { session_id: b, frame: 'image' });
-  assert.equal(await exists(o.meta.frame.path), true);
+  assert.equal(await exists(ok(o).frame.path), true);
   await app.sessions.onSidecarExit();
   assert.equal(app.store.get(b).end_reason, 'sidecar_exit');
   assert.equal(await exists(path.join(dir, b)), false);
@@ -168,11 +168,11 @@ test('a symlink planted as the session image dir is refused; its target is untou
   await fs.symlink(victim, link);
 
   const r = await mcp('observe', { session_id: sid, frame: 'image' });
-  assert.equal(r.meta.frame.path, undefined);
-  assert.match(r.meta.frame.error, /not a real directory/);
+  assert.equal(ok(r).frame.path, undefined);
+  assert.match(ok(r).frame.error, /not a real directory/);
   assert.deepEqual(await snapshotTree(victim), before, 'no mode change, no PNG, nothing removed');
 
-  assert.equal((await mcp('end_session', { session_id: sid })).result.ok, true);
+  ok(await mcp('end_session', { session_id: sid }));
   assert.equal(app.store.get(sid).status, 'ended');
   assert.equal(await fs.lstat(link).then(() => true, () => false), false, 'the link itself is removed');
   assert.deepEqual(await snapshotTree(victim), before, 'prune left the target alone');
@@ -190,11 +190,11 @@ test('images/ swapped for a symlink after start is refused by write and prune; t
   await fs.symlink(victim, imagesDir);
 
   const r = await mcp('observe', { session_id: sid, frame: 'image' });
-  assert.equal(r.meta.frame.path, undefined);
-  assert.match(r.meta.frame.error, /not a real directory/);
+  assert.equal(ok(r).frame.path, undefined);
+  assert.match(ok(r).frame.error, /not a real directory/);
   assert.deepEqual(await snapshotTree(victim), before, 'no mode change, no PNG, nothing removed');
 
-  assert.equal((await mcp('end_session', { session_id: sid })).result.ok, true, 'a refused prune never fails the end');
+  ok(await mcp('end_session', { session_id: sid })); // a refused prune never fails the end
   assert.match(log.text(), /pruning board images of s-[0-9a-f]+ failed: .*not a real directory/);
   assert.deepEqual(await snapshotTree(victim), before, `prune did not remove victim/${sid}`);
 });

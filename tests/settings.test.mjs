@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { json, sendJsonReq, startApp, startGame, until } from './_helpers.mjs';
+import { json, ok, refusal, sendJsonReq, startApp, startGame, until } from './_helpers.mjs';
 
 const KEY = 'test-arc-key-0123456789abcdef';
 
@@ -16,7 +16,7 @@ test('the key is stored, masked in the API, and reaches only the sidecar', async
   const results = [];
   const record = async (p) => { const r = await p; results.push(JSON.stringify(r)); return r; };
   await record(mcp('list_games'));
-  const sid = (await record(mcp('start_session', { game_id: 'fake-maze' }))).meta.session_id;
+  const sid = ok(await record(mcp('start_session', { game_id: 'fake-maze' }))).session_id;
   await record(mcp('act', { session_id: sid, action: 'ACTION1' }));
   await record(mcp('end_session', { session_id: sid }));
 
@@ -82,37 +82,33 @@ test('a key change cannot interleave with a start', async (t) => {
   const change = await app.sessions.changeKey(async () => { applied = true; });
   assert.equal(change.code, 'SESSIONS_ACTIVE');
   assert.equal(applied, false);
-  const sid = (await starting).meta.session_id;
-  assert.ok((await mcp('act', { session_id: sid, action: 'ACTION1' })).meta);
+  const sid = ok(await starting).session_id;
+  ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
   await mcp('end_session', { session_id: sid });
 
   // A key change in progress blocks starts until it finishes.
   let release;
   const gate = new Promise((r) => { release = r; });
   const changing = app.sessions.changeKey(() => gate);
-  const blocked = (await mcp('start_session', { game_id: 'fake-maze' })).result;
-  assert.equal(blocked.code, 'TOOLKIT_NOT_READY');
-  assert.equal(blocked.state, 'reconfiguring');
+  const blocked = refusal(await mcp('start_session', { game_id: 'fake-maze' }), 'TOOLKIT_NOT_READY');
+  assert.equal(blocked.details.state, 'reconfiguring');
   release();
   assert.deepEqual(await changing, { ok: true });
-  assert.ok((await mcp('start_session', { game_id: 'fake-maze' })).meta);
+  ok(await mcp('start_session', { game_id: 'fake-maze' }));
 });
 
 test('a refused key or unreachable API is a refusal, not an empty game list', async (t) => {
   const { url, mcp, log } = await startApp(t);
   const bad = 'bad-key-0123456789abcdef';
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: bad })).status, 200);
-  const r = (await mcp('list_games')).result;
-  assert.equal(r.ok, false);
-  assert.equal(r.code, 'TOOLKIT_ERROR');
-  assert.match(r.detail, /rejected the API key \(HTTP 401\)/);
-  assert.ok(!r.detail.includes(bad));
-  const s = (await mcp('start_session', { game_id: 'fake-maze' })).result;
-  assert.equal(s.code, 'TOOLKIT_ERROR', 'not GAME_UNKNOWN');
+  const r = refusal(await mcp('list_games'), 'TOOLKIT_ERROR');
+  assert.match(r.details.detail, /rejected the API key \(HTTP 401\)/);
+  assert.ok(!r.details.detail.includes(bad));
+  refusal(await mcp('start_session', { game_id: 'fake-maze' }), 'TOOLKIT_ERROR'); // not GAME_UNKNOWN
   assert.ok(!log.text().includes(bad));
 
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'offline-0123456789abcdef' })).status, 200);
-  assert.equal((await mcp('list_games')).result.code, 'NETWORK_ERROR');
+  refusal(await mcp('list_games'), 'NETWORK_ERROR');
 });
 
 test('a second concurrent key change gets KEY_CHANGE_IN_PROGRESS, not the live-sessions message', async (t) => {
@@ -130,8 +126,8 @@ test('a second concurrent key change gets KEY_CHANGE_IN_PROGRESS, not the live-s
 
 test('after a key change, starts validate against the new key\'s game list', async (t) => {
   const { url, mcp } = await startApp(t);
-  assert.ok((await mcp('list_games')).result.games.some((g) => g.game_id === 'fake-evil'), 'cached under the old key');
+  assert.ok(ok(await mcp('list_games')).games.some((g) => g.game_id === 'fake-evil'), 'cached under the old key');
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'small-key-0123456789' })).status, 200);
-  assert.equal((await mcp('start_session', { game_id: 'fake-evil' })).result.code, 'GAME_UNKNOWN');
-  assert.ok((await mcp('start_session', { game_id: 'fake-maze' })).meta);
+  refusal(await mcp('start_session', { game_id: 'fake-evil' }), 'GAME_UNKNOWN');
+  ok(await mcp('start_session', { game_id: 'fake-maze' }));
 });

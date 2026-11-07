@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
-import { freshEnv, json, sendJsonReq, startApp, startGame } from './_helpers.mjs';
+import { freshEnv, json, ok, refusal, sendJsonReq, startApp, startGame } from './_helpers.mjs';
 
 test('sessions and steps survive a restart; live sessions end as backend_restart', async (t) => {
   const env = await freshEnv(t);
@@ -21,13 +21,13 @@ test('sessions and steps survive a restart; live sessions end as backend_restart
   assert.equal(meta.end_reason, 'backend_restart');
   assert.equal(second.app.store.get(done).end_reason, 'ended_by_agent');
   const obs = await second.mcp('observe', { session_id: sid });
-  assert.equal(obs.meta.step, 2);
-  assert.equal(obs.text[0], paint.text[0], 'observe rebuilds the last frame from the compressed tail of steps.jsonl');
+  assert.equal(ok(obs).step, 2);
+  assert.deepEqual(ok(obs).frame.rows, ok(paint).frame.rows, 'observe rebuilds the last frame from the compressed tail of steps.jsonl');
   const steps = (await json(`${second.url}/api/sessions/${sid}/steps`)).body.steps;
   assert.deepEqual(steps.map((s) => s.action), ['START', 'ACTION4', 'ACTION6']);
   assert.equal(steps[1].reasoning, 'right');
   assert.deepEqual([steps[2].x, steps[2].y], [7, 9]);
-  assert.equal((await second.mcp('act', { session_id: sid, action: 'ACTION1' })).result.code, 'SESSION_ENDED');
+  refusal(await second.mcp('act', { session_id: sid, action: 'ACTION1' }), 'SESSION_ENDED');
 });
 
 test('state stays in the data dir with private modes; the projects root is untouched', async (t) => {
@@ -35,7 +35,7 @@ test('state stays in the data dir with private modes; the projects root is untou
   const { mcp, url } = await startApp(t, { env });
   await startGame(mcp);
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'abcdefgh-1234' })).status, 409);
-  const sid = (await mcp('list_sessions')).result.sessions[0].session_id;
+  const sid = ok(await mcp('list_sessions')).sessions[0].session_id;
   await mcp('end_session', { session_id: sid });
   assert.equal((await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'abcdefgh-1234' })).status, 200);
   const mode = async (p) => (await fs.stat(p)).mode & 0o777;
@@ -76,15 +76,15 @@ test('step lines store a compressed frame; the API returns the same rows; legacy
   assert.deepEqual(paged.map((s) => s.n), [1]);
   // observe on the ended session reads the last frame from the legacy tail.
   const obs = await second.mcp('observe', { session_id: sid });
-  assert.notEqual(obs.text[0], paint.text[0]);
-  assert.equal(obs.text[0].split('\n')[2 + 9][3 + 7], apiSteps[0].frame[9][7]);
+  assert.notDeepEqual(ok(obs).frame.rows, ok(paint).frame.rows);
+  assert.equal(ok(obs).frame.rows[9][7], apiSteps[0].frame[9][7]);
 });
 
 test('notes.jsonl survives a restart', async (t) => {
   const env = await freshEnv(t);
   const first = await startApp(t, { env });
   const r = await first.mcp('start_session', { game_id: 'fake-maze' });
-  const { session_id: sid, script } = r.meta;
+  const { session_id: sid, script } = ok(r);
   const res = await sendJsonReq(`${script.base_url}attach`, 'POST', { note: 'kept across restarts' }, { authorization: `Bearer ${script.token}` });
   assert.equal(res.body.run, 1);
   await first.close();
@@ -124,7 +124,7 @@ test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversi
   for (const s of steps.slice(2)) assert.equal(s.frame, null, `step ${s.n}`);
   // The tail is tampered: the session has no last frame, and still observes.
   const obs = await second.mcp('observe', { session_id: sid });
-  assert.equal(obs.text[0], 'no frame');
+  assert.deepEqual(ok(obs).frame, { mode: 'full', rows: null });
   assert.equal((await json(`${second.url}/api/health`)).status, 200);
 });
 
@@ -138,7 +138,7 @@ test('allow_reset:false persists and survives a restart', async (t) => {
   const meta = second.app.store.get(sid);
   assert.equal(meta.allow_reset, false);
   assert.equal(meta.end_reason, 'backend_restart');
-  const listed = (await second.mcp('list_sessions', { scope: 'all' })).result.sessions.find((s) => s.session_id === sid);
+  const listed = ok(await second.mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === sid);
   assert.equal(listed.allow_reset, false);
-  assert.equal((await second.mcp('observe', { session_id: sid })).meta.allow_reset, false);
+  assert.equal(ok(await second.mcp('observe', { session_id: sid })).allow_reset, false);
 });

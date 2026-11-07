@@ -48,8 +48,8 @@ try {
   const srv = await boot(good.dir);
   try {
     const start = await mcp(srv.url, 'start_session', { game_id: 'fake-maze' });
-    if (!start.meta) throw new Error(`start_session failed: ${JSON.stringify(start)}`);
-    await mcp(srv.url, 'act', { session_id: start.meta.session_id, action: 'ACTION4', reasoning: 'Playing a bundled game with no download.' });
+    if (!start.structured) throw new Error(`start_session failed: ${JSON.stringify(start)}`);
+    await mcp(srv.url, 'act', { session_id: start.structured.session_id, action: 'ACTION4', reasoning: 'Playing a bundled game with no download.' });
     await shoot(srv.url, 'bundle-ready.png', async (page) => {
       const label = page.locator('#toolkit-source');
       await page.waitForFunction(() => document.getElementById('toolkit-source').textContent.includes('bundle'));

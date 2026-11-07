@@ -18,14 +18,16 @@ export const SESSIONS_PAGE_MAX = 100;
 export const SIDECAR_LINE_MAX = 1048576;
 // Detail text carried in a refusal (stderr tails, bootstrap output).
 export const DETAIL_MAX = 1000;
-// list_sessions returns at most this many, newest first.
-export const LIST_SESSIONS_MAX = 50;
+// Sessions per page of list_sessions' text view, newest first (the json view
+// lists every session in scope; `offset` pages the text).
+export const LIST_SESSIONS_TEXT_PAGE = 50;
 // Live viewer connections at once; past this an SSE request gets 503.
 export const SSE_MAX_CLIENTS = 32;
 // Bytes an SSE client may leave unsent while it is still behind from an
 // earlier write; past this it is dropped. A single large write never trips it.
 export const SSE_MAX_BUFFERED_BYTES = 256 * 1024;
-// A diff touching more rows than this is sent as a full frame instead.
+// Text view only: a diff touching more rows than this is sent as a full frame
+// instead (the json view always lists every changed row).
 export const DIFF_MAX_ROWS = 24;
 
 // Scripted play (src/scriptAccess.js, src/scriptRoutes.js).

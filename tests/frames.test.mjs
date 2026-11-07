@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { frameText, renderDiff, renderFull } from '../src/frames.js';
+import { frameData, frameText, renderDiff, renderFull } from '../src/frames.js';
 import { DIFF_MAX_ROWS } from '../src/limits.js';
 
 const blank = (w = 64, h = 64, c = '5') => Array.from({ length: h }, () => c.repeat(w));
@@ -95,4 +95,46 @@ test('bbox spans to a changed status-bar cell at (63,63)', () => {
   const prev = blank();
   const next = set(set(prev, 10, 12, '9'), 63, 63, '1');
   assert.deepEqual(renderDiff(prev, next).bbox, { x0: 10, y0: 12, x1: 63, y1: 63 });
+});
+
+// Invariant: the json view's diff is complete. The row-count switch to a full
+// frame is a text-view heuristic only (frameData has none).
+test('frameData diff lists every changed row past DIFF_MAX_ROWS; frameText switches to full', () => {
+  const prev = blank();
+  const next = blank();
+  const n = DIFF_MAX_ROWS + 5;
+  for (let y = 0; y < n; y++) next[y] = next[y].slice(0, 5) + 'f' + next[y].slice(6);
+  const d = frameData('diff', prev, next);
+  assert.equal(d.mode, 'diff');
+  assert.equal(d.changed_rows.length, n);
+  assert.equal(d.changed_cells, n);
+  for (const [i, r] of d.changed_rows.entries()) assert.deepEqual(r, { y: i, row: next[i] });
+  assert.deepEqual(d.bbox, { x0: 5, y0: 0, x1: 5, y1: n - 1 });
+  assert.deepEqual(frameText('diff', prev, next).frame, { mode: 'full', auto_full: true });
+});
+
+// Invariant: changed_rows are exactly the rows that differ, in order, with the
+// same counts renderDiff reports.
+test('frameData diff rows are the differing rows and agree with renderDiff', () => {
+  const prev = blank();
+  const next = blank();
+  next[3] = 'f' + next[3].slice(1);
+  next[9] = next[9].slice(0, 63) + 'a';
+  const d = frameData('diff', prev, next);
+  assert.deepEqual(d.changed_rows.map((r) => r.y), [3, 9]);
+  const t = renderDiff(prev, next);
+  assert.equal(d.changed_cells, t.changed_cells);
+  assert.deepEqual(d.bbox, t.bbox);
+  assert.deepEqual(frameData('diff', prev, prev), { mode: 'diff', changed_cells: 0, bbox: null, changed_rows: [] });
+});
+
+// Invariant: each non-diff mode and each missing input yields the documented json frame.
+test('frameData full, none, no previous frame and no current frame', () => {
+  const rows = blank();
+  assert.deepEqual(frameData('full', null, rows), { mode: 'full', rows });
+  assert.deepEqual(frameData('none', null, rows), { mode: 'none' });
+  assert.deepEqual(frameData('diff', null, rows), { mode: 'full', auto_full: true, rows });
+  assert.deepEqual(frameData('diff', rows.slice(1), rows), { mode: 'full', auto_full: true, rows });
+  assert.deepEqual(frameData('full', null, null), { mode: 'full', rows: null });
+  assert.deepEqual(frameData('diff', rows, null), { mode: 'full', rows: null, auto_full: true });
 });

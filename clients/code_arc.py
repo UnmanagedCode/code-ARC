@@ -1,6 +1,6 @@
 """Scripted play for Code ARC: a stdlib-only client for the script HTTP API.
 
-    import sys; sys.path.insert(0, "<directory of meta.script.client>")
+    import sys; sys.path.insert(0, "<directory of script['client']>")
     from code_arc import Session, Refusal
     s = Session.attach(script["base_url"], script["token"], "Sweep ACTION6 along row 10: which cell toggles the door?")
     for x in range(64):
@@ -8,8 +8,8 @@
         if obs.levels_completed: s.note("Row 10 solved it; replaying the route on level 2"); break
     obs.save_png("/tmp/board.png")
 
-`script` is `meta.script` from start_session (or the result of the
-script_access tool). Every refused call raises `Refusal` with the server's
+`script` is the `script` block from start_session (or from the
+script_access tool's result). Every refused call raises `Refusal` with the server's
 code; nothing is retried. `TransportError` means the backend could not be
 reached or answered garbage. Contracts: docs/script-api.md.
 """

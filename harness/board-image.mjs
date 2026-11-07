@@ -25,16 +25,16 @@ const app = await createApp({
 await new Promise((resolve) => app.server.listen(0, '127.0.0.1', resolve));
 try {
   const call = async (tool, a) => {
-    const r = await app.mcp.handle({ tool, arguments: a, caller: { sessionId: 'harness', project: 'harness' } });
-    if (!r.meta) throw new Error(`${tool} failed: ${JSON.stringify(r)}`);
-    return r;
+    const r = await app.mcp.handle({ tool, arguments: a, caller: { sessionId: 'harness', project: 'harness' }, format: 'json' });
+    if (!r.structured) throw new Error(`${tool} failed: ${JSON.stringify(r)}`);
+    return r.structured;
   };
-  const sid = (await call('start_session', { game_id: 'fake-maze' })).meta.session_id;
+  const sid = (await call('start_session', { game_id: 'fake-maze' })).session_id;
   await call('act', { session_id: sid, action: 'ACTION4' });
   await call('act', { session_id: sid, action: 'ACTION6', x: 10, y: 20 });
   const r = await call('observe', { session_id: sid, ...args });
-  if (!r.meta.frame.path) throw new Error(`no image: ${JSON.stringify(r.meta.frame)}`);
-  console.log(JSON.stringify({ path: r.meta.frame.path, data_dir: dataDir }));
+  if (!r.frame.path) throw new Error(`no image: ${JSON.stringify(r.frame)}`);
+  console.log(JSON.stringify({ path: r.frame.path, data_dir: dataDir }));
   console.log(`# when done: rm -rf ${dataDir}`);
 } finally {
   await app.close();
