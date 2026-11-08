@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isNewerThanAll } from '../frontend/sessions.js';
-import { mergeNotes, needsRunHeader, noteFor, sourceOf } from '../frontend/runs.js';
+import { hasRun, mergeNotes, needsRunHeader, noteFor, sourceOf } from '../frontend/runs.js';
 
 const s = (id, minute) => ({ id, created_at: `2026-01-01T00:${String(minute).padStart(2, '0')}:00.000Z` });
 
@@ -33,6 +33,16 @@ test('needsRunHeader: the first loaded step of each run segment, across tool int
   const trimmed = steps.slice(2);
   assert.equal(needsRunHeader(trimmed, 0), true);
   assert.equal(needsRunHeader(steps.slice(3), 0), false, 'a tool step never does');
+});
+
+test('a script step taken before the first note has no run: no header, no note, and it does not hide the next run\'s header', () => {
+  const early = { n: 1, action: 'ACTION1', source: 'script' };
+  assert.equal(hasRun(early), false);
+  assert.equal(hasRun(script(2, 1)), true);
+  assert.equal(hasRun(tool(3)), false);
+  const steps = [tool(0), early, script(2, 1), script(3, 1)];
+  assert.deepEqual(steps.map((_, i) => needsRunHeader(steps, i)), [false, false, true, false]);
+  assert.equal(noteFor([{ run: 1, text: 'a' }], early), null);
 });
 
 test("noteFor: the note of a script step's run; none for tool steps or an unloaded run", () => {

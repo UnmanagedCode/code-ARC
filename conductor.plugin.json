@@ -90,7 +90,7 @@
       },
       {
         "name": "start_session",
-        "description": "Start playing a game: the new session_id, the first full frame and the script block (base_url, token, client) for scripted play. A frame row is a string of hex digits, one per cell (the palette index 0-f); x is the column, y the row, origin top-left. Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
+        "description": "Start playing a game: the new session_id, the first full frame. A frame row is a string of hex digits, one per cell (the palette index 0-f); x is the column, y the row, origin top-left. Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -131,8 +131,7 @@
             "step",
             "frame_count",
             "full_reset",
-            "frame",
-            "script"
+            "frame"
           ],
           "properties": {
             "session_id": {
@@ -341,26 +340,6 @@
                   }
                 }
               ]
-            },
-            "script": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "base_url",
-                "token",
-                "client"
-              ],
-              "properties": {
-                "base_url": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                },
-                "client": {
-                  "type": "string"
-                }
-              }
             }
           }
         }
@@ -1336,18 +1315,25 @@
         }
       },
       {
-        "name": "script_access",
-        "description": "Get a fresh token for scripting this session (invalidates the previous one).",
+        "name": "note",
+        "description": "Open a script run on a session: a note saying what your run_code program tries next and why, shown live to the user above the steps that follow.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "session_id": {
               "type": "string",
               "pattern": "^s-[0-9a-f]{12}$"
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "description": "What the program tries and why, a sentence or two."
             }
           },
           "required": [
-            "session_id"
+            "session_id",
+            "note"
           ],
           "additionalProperties": false
         },
@@ -1356,31 +1342,15 @@
           "additionalProperties": false,
           "required": [
             "session_id",
-            "script"
+            "run"
           ],
           "properties": {
             "session_id": {
               "type": "string"
             },
-            "script": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "base_url",
-                "token",
-                "client"
-              ],
-              "properties": {
-                "base_url": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                },
-                "client": {
-                  "type": "string"
-                }
-              }
+            "run": {
+              "type": "integer",
+              "description": "The run this note opened; json-format steps on the session record it until the next note."
             }
           }
         }

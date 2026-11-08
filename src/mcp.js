@@ -5,7 +5,9 @@
 // a refusal in either {error, code, details?}. Arguments are re-validated
 // against the manifest's own schemas (the single source; cc validates first,
 // but tests and any other caller reach the handlers directly), then handed to
-// the session service. A handler returns a service refusal as-is, or a view
+// the session service. The format also marks who is calling: json is a program
+// (cc's run_code goes through the REST alias, which is always json; cc's agents
+// connect with ?format=text), so its steps are recorded as scripted. A handler returns a service refusal as-is, or a view
 // pair {json, text}: only the requested view is built.
 import manifest from '../conductor.plugin.json' with { type: 'json' };
 import { IMAGE_SPEC } from './boardImage.js';
@@ -13,7 +15,7 @@ import { frameData, frameText } from './frames.js';
 import { observationFields } from './observation.js';
 import { validate } from './schema.js';
 import { refuse } from './sessions.js';
-import { endText, gamesText, observationText, scriptAccessText, scriptText, sessionsText } from './toolText.js';
+import { endText, gamesText, noteText, observationText, sessionsText } from './toolText.js';
 
 const TOOLS = new Map(manifest.mcp.tools.map((t) => [t.name, t.inputSchema]));
 
@@ -82,22 +84,13 @@ export function createMcp({ sessions, images, log = console }) {
 
   const handlers = {
     list_games: async () => simple(await sessions.listGames(), gamesText),
-    // The script block (with its token) rides on start_session and script_access only.
-    start_session: async (a, caller) => {
-      const r = await sessions.start(a, caller);
-      const out = await observation(r, { frame: 'full' });
-      if (!r.ok || out.ok === false) return out;
-      return {
-        json: () => ({ ...out.json(), script: r.script }),
-        text: () => `${out.text()}\nScript access: ${scriptText(r.script)} (attach with a note before scripted moves).`,
-      };
-    },
+    start_session: async (a, caller) => observation(await sessions.start(a, caller), { frame: 'full' }),
     act: async (a, caller) => misplacedImageOptions(a) || observation(await sessions.act(a, caller), a),
     reset: async (a, caller) => misplacedImageOptions(a) || observation(await sessions.reset(a, caller), a),
     observe: async (a) => misplacedImageOptions(a) || observation(sessions.observe(a), a),
     end_session: async (a, caller) => simple(await sessions.end(a, caller), endText),
     list_sessions: async (a, caller) => simple(sessions.listSessions(a, caller), (r) => sessionsText(r, a.offset ?? 0)),
-    script_access: async (a, caller) => simple(sessions.scriptAccess(a, caller), scriptAccessText),
+    note: async (a, caller) => simple(await sessions.note(a, caller), noteText),
   };
 
   return {
@@ -117,6 +110,7 @@ export function createMcp({ sessions, images, log = console }) {
       const caller = {
         sessionId: typeof c.sessionId === 'string' ? c.sessionId.slice(0, 200) : null,
         project: typeof c.project === 'string' ? c.project.slice(0, 200) : null,
+        source: format === 'json' ? 'script' : 'tool',
       };
       try {
         const out = await handler(v.args, caller);

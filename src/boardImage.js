@@ -1,8 +1,7 @@
 // Renders a frame (hex rows) to a board image: the pixel rules are
 // docs/protocol.md → Board image, every number and colour comes from
-// clients/board_image.json. clients/code_arc.py (Observation.save_png) renders
-// the same rules; tests/boardImage.test.mjs pins the two to identical pixels.
-import IMAGE_SPEC from '../clients/board_image.json' with { type: 'json' };
+// src/board_image.json.
+import IMAGE_SPEC from './board_image.json' with { type: 'json' };
 import { COORD_MAX } from './limits.js';
 import { encodePng } from './png.js';
 
@@ -14,7 +13,7 @@ const COLOUR = /^#[0-9A-Fa-f]{6}$/;
 const DIGITS = '0123456789';
 
 function fail(msg) {
-  throw new Error(`clients/board_image.json: ${msg}`);
+  throw new Error(`src/board_image.json: ${msg}`);
 }
 
 function colour(hex, where) {

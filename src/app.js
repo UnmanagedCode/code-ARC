@@ -13,7 +13,6 @@ import { createSseHub } from './sse.js';
 import { createStatic } from './static.js';
 import { createStore } from './store.js';
 import { createRouter, HttpError, onClientError, readJsonBody, SECURITY_HEADERS, sendJson } from './http.js';
-import { scriptRoutes } from './scriptRoutes.js';
 import { SESSION_ID_RE, SESSIONS_PAGE_MAX, STEPS_PAGE_MAX } from './limits.js';
 
 export async function createApp({
@@ -63,15 +62,8 @@ export async function createApp({
     onExit: ({ expected }) => { if (!expected) sessions?.onSidecarExit().catch((e) => log.error(`[code-arc] ending sessions after sidecar exit failed: ${e.message}`)); },
     onStatus: publishStatus,
   });
-  // The script API is the backend's own address: one hop, no cc proxy. The
-  // port is read when a session starts, after the server listens.
-  const scriptBase = () => {
-    const addr = server.address();
-    if (!addr || typeof addr !== 'object') throw new Error('the server is not listening yet');
-    return `http://127.0.0.1:${addr.port}/api/play/`;
-  };
   sessions = createSessions({
-    store, images, sidecar, bootstrap, hub, scriptBase, checkoutDir: config.checkoutDir, clock, timers, log,
+    store, images, sidecar, bootstrap, hub, clock, timers, log,
     ...(deadlines ? { deadlines } : {}), ...(onlineRpmLimit ? { onlineRpmLimit } : {}), ...(stepRate ? { stepRate } : {}),
   });
   const mcp = createMcp({ sessions, images, log });
@@ -125,7 +117,6 @@ export async function createApp({
     }],
     ['DELETE', '/api/settings/api-key', async (req, res) => changeKey(res, () => keyStore.clear())],
     ['POST', '/api/mcp', async (req, res) => sendJson(res, 200, await mcp.handle(await readJsonBody(req)))],
-    ...scriptRoutes({ sessions }),
   ];
 
   const server = http.createServer(createRouter({ routes, fallback: serveStatic, log }));

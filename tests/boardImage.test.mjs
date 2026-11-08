@@ -1,20 +1,12 @@
 // The board image renderer (src/boardImage.js), its PNG encoder (src/png.js)
-// and its parity with the Python client's Observation.save_png. The pixel rules
-// are docs/protocol.md → Board image; the numbers come from IMAGE_SPEC.
+// The pixel rules are docs/protocol.md → Board image; the numbers come from IMAGE_SPEC.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { promisify } from 'node:util';
-import { freshEnv, ROOT } from './_helpers.mjs';
 import { decodePng, rgbOf } from './_png.mjs';
 import { encodePng } from '../src/png.js';
 import { boardPng, IMAGE_SPEC, renderBoard } from '../src/boardImage.js';
 import { COLOR_MAP } from '../frontend/palette.js';
 
-const run = promisify(execFile);
-const DRIVER = path.join(ROOT, 'tests', 'fixtures', 'png_driver.py');
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
 const PALETTE = IMAGE_SPEC.palette.map(hexRgb);
 const CONTRAST = IMAGE_SPEC.grid.contrast.map(hexRgb);
@@ -179,25 +171,4 @@ test('boardPng decodes to renderBoard', () => {
   const want = renderBoard(ODD, opts);
   assert.deepEqual([img.width, img.height], [want.width, want.height]);
   assert.deepEqual(rgbOf(img), want.rgb);
-});
-
-test('Python parity: save_png renders exactly the pixels of renderBoard', async (t) => {
-  const env = await freshEnv(t);
-  const out = path.join(env.tmp, 'py');
-  await fs.mkdir(out);
-  const cases = [];
-  for (const [name, rows] of [['big', BIG], ['odd', ODD], ['one', ['c']]]) {
-    for (const scale of SCALES) for (const grid of [true, false]) cases.push({ rows, scale, grid, out: `${name}-${scale}-${grid}.png` });
-  }
-  const child = run('python3', ['-I', DRIVER, path.join(ROOT, 'clients'), out], { timeout: 60000, maxBuffer: 1 << 20 });
-  child.child.stdin.end(JSON.stringify(cases));
-  const paths = JSON.parse((await child).stdout);
-  assert.equal(paths.length, cases.length);
-  for (const [i, c] of cases.entries()) {
-    assert.equal(paths[i], path.join(out, c.out));
-    const img = decodePng(await fs.readFile(paths[i]));
-    const want = renderBoard(c.rows, { scale: c.scale, grid: c.grid });
-    assert.deepEqual([img.width, img.height], [want.width, want.height], c.out);
-    assert.ok(rgbOf(img).equals(want.rgb), `${c.out}: pixels differ`);
-  }
 });

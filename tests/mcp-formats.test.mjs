@@ -41,7 +41,6 @@ test('golden path in both formats, tool by tool', async (t) => {
   const sid = start.session_id;
   const startText = prose(await mcpText('start_session', { game_id: 'fake-maze' }, { sessionId: 'agent-b', project: 'p' }));
   assert.match(startText, /fake-maze/);
-  assert.match(startText, /Script access: base_url \S+ · token [\w-]+ · client \S+/);
 
   for (const frame of ['diff', 'full', 'none']) {
     const j = ok(await mcp('act', { session_id: sid, action: 'ACTION1', frame }));
@@ -65,9 +64,10 @@ test('golden path in both formats, tool by tool', async (t) => {
   assert.ok(noOkKey(list));
   assert.ok(prose(await mcpText('list_sessions', { scope: 'all' })).includes(sid));
 
-  const access = ok(await mcp('script_access', { session_id: sid }));
-  assert.ok(noOkKey(access));
-  assert.ok(prose(await mcpText('script_access', { session_id: sid })).includes(sid));
+  const note = ok(await mcp('note', { session_id: sid, note: 'a plan' }));
+  assert.ok(noOkKey(note));
+  assert.equal(note.run, 1);
+  assert.ok(prose(await mcpText('note', { session_id: sid, note: 'a plan' })).includes(sid));
 
   const end = ok(await mcp('end_session', { session_id: sid }));
   assert.ok(noOkKey(end));
