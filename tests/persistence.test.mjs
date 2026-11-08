@@ -145,3 +145,24 @@ test('allow_reset:false persists and survives a restart', async (t) => {
   assert.equal(listed.allow_reset, false);
   assert.equal(ok(await second.mcp('observe', { session_id: sid })).allow_reset, false);
 });
+
+test('a legacy meta without allow_reset reads as resets allowed', async (t) => {
+  const env = await freshEnv(t);
+  const id = 's-000000000001';
+  const t0 = new Date(Date.UTC(2026, 0, 1)).toISOString();
+  const meta = {
+    id, game_id: 'fake-maze', title: 'Legacy', mode: 'local',
+    owner: { sessionId: 'agent-a', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
+    status: 'ended', end_reason: 'ended_by_agent', stalled: false, created_at: t0, updated_at: t0, last_activity_at: t0,
+    step_count: 0, last: { state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1], frame_count: 1, full_reset: true },
+  };
+  const file = path.join(env.dataDir, 'sessions', id, 'meta.json');
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(meta));
+  const { mcp, mcpText, url } = await startApp(t, { env });
+  assert.equal(ok(await mcp('observe', { session_id: id })).allow_reset, true);
+  assert.match((await mcpText('observe', { session_id: id })).text, /allow_reset: true/);
+  assert.equal(ok(await mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === id).allow_reset, true);
+  assert.equal('allow_reset' in (await json(`${url}/api/sessions/${id}`)).body, false);
+  assert.equal('allow_reset' in JSON.parse(await fs.readFile(file, 'utf8')), false);
+});

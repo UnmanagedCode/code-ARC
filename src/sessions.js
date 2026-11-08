@@ -14,6 +14,7 @@ import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT,
 
 const SWEEP_MS = 60 * 1000;
 export const FINISHED = new Set(['WIN', 'GAME_OVER']);
+// A missing key is a legacy meta (stored under the old default): resets allowed.
 export const resetAllowed = (meta) => meta.allow_reset !== false;
 // The actions a session offers: a one-run session never offers RESET and
 // offers nothing once finished.
@@ -256,7 +257,7 @@ export function createSessions({
       return r.ok ? { ok: true, games: r.games, ...(r.webUnavailable ? { web_unavailable: r.webUnavailable } : {}) } : r;
     },
 
-    async start({ game_id: gameId, online = false, allow_reset: allowReset = true }, caller) {
+    async start({ game_id: gameId, online = false, allow_reset: allowReset = false }, caller) {
       const tk = toolkitGate();
       if (tk) return tk;
       if (typeof gameId !== 'string' || !GAME_ID_RE.test(gameId)) return refuse('INVALID_ARGUMENT', 'game_id is malformed');
@@ -295,7 +296,7 @@ export function createSessions({
           game_id: res.result.game_id || gameId,
           title,
           mode: online ? 'online' : 'local',
-          ...(allowReset ? {} : { allow_reset: false }),
+          allow_reset: allowReset,
           owner: { sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
           scorecard_id: card,
           scorecard_url: online ? scorecardUrl(card) : null,
@@ -439,7 +440,7 @@ export function createSessions({
         scope,
         total: all.length,
         sessions: list.map((m) => ({
-          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, ...(m.allow_reset === false ? { allow_reset: false } : {}), status: m.status, end_reason: m.end_reason,
+          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, allow_reset: resetAllowed(m), status: m.status, end_reason: m.end_reason,
           stalled: m.stalled, state: m.last?.state, levels_completed: m.last?.levels_completed, win_levels: m.last?.win_levels,
           step: m.step_count, owner: m.owner, updated_at: m.updated_at, ...(m.mode === 'online' ? { scorecard_url: m.scorecard_url } : {}),
         })),

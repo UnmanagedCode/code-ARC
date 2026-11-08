@@ -36,7 +36,7 @@ test('golden path in both formats, tool by tool', async (t) => {
   const gamesText = prose(await mcpText('list_games'));
   for (const g of games.games) assert.ok(gamesText.includes(g.game_id), g.game_id);
 
-  const start = ok(await mcp('start_session', { game_id: 'fake-maze' }));
+  const start = ok(await mcp('start_session', { game_id: 'fake-maze', allow_reset: true }));
   assert.ok(noOkKey(start));
   const sid = start.session_id;
   const startText = prose(await mcpText('start_session', { game_id: 'fake-maze' }, { sessionId: 'agent-b', project: 'p' }));
@@ -185,7 +185,7 @@ test('refusals are identical in both formats and carry their extras under detail
   assert.match(misplaced.error, /frame:'image'/);
 
   await both('observe', { session_id: sid2, image_scale: 8 }, 'INVALID_ARGUMENT');
-  const sid3 = await startGame(mcp, 'fake-maze');
+  const sid3 = await startGame(mcp, 'fake-maze', { allow_reset: true });
   await app.store.update(sid3, { step_count: SESSION_STEPS_MAX });
   await both('reset', { session_id: sid3 }, 'SESSION_STEP_LIMIT');
 
@@ -229,4 +229,15 @@ test('end_session warnings are returned in json and named in text', async (t) =>
   const text = prose(await mcpText('end_session', { session_id: b }));
   assert.match(text, /scorecard: none returned/);
   assert.match(text, new RegExp(`warning ${j.warnings[0].code}: `));
+});
+
+test('text always states allow_reset in observations; list_sessions text marks only allow_reset:true', async (t) => {
+  const { mcp, mcpText } = await startApp(t, FAST);
+  const off = await startGame(mcp, 'fake-maze');
+  const on = await startGame(mcp, 'fake-maze', { allow_reset: true });
+  assert.match(prose(await mcpText('observe', { session_id: off })), /allow_reset: false \(one run; reset is refused\)/);
+  assert.match(prose(await mcpText('observe', { session_id: on })), /allow_reset: true/);
+  const lines = prose(await mcpText('list_sessions')).split('\n');
+  assert.match(lines.find((l) => l.includes(on)), /allow_reset:true/);
+  assert.doesNotMatch(lines.find((l) => l.includes(off)), /allow_reset/);
 });

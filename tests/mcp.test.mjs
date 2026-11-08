@@ -18,7 +18,7 @@ test('golden path: list, start, move, ACTION6, observe, reset, end', async (t) =
   const games = ok(await mcp('list_games'));
   assert.ok(games.games.some((g) => g.game_id === 'fake-maze'));
 
-  const start = ok(await mcp('start_session', { game_id: 'fake-maze' }));
+  const start = ok(await mcp('start_session', { game_id: 'fake-maze', allow_reset: true }));
   const sid = start.session_id;
   assert.match(sid, /^s-[0-9a-f]{12}$/);
   assert.equal(start.mode, 'local');
@@ -118,9 +118,9 @@ test('gating refusals', async (t) => {
   assert.equal((await calls()).filter((c) => c.op === 'step').length, stepsBefore, 'refusals never reach the toolkit');
 });
 
-test('GAME_FINISHED after a win; reset still works', async (t) => {
+test('GAME_FINISHED after a win; reset still works with allow_reset:true', async (t) => {
   const { mcp, calls } = await startApp(t);
-  const sid = await startGame(mcp);
+  const sid = await startGame(mcp, 'fake-maze', { allow_reset: true });
   for (const a of ['ACTION4', 'ACTION4', 'ACTION4']) await mcp('act', { session_id: sid, action: a });
   let last;
   for (const a of ['ACTION2', 'ACTION2', 'ACTION2']) last = await mcp('act', { session_id: sid, action: a });
@@ -191,7 +191,7 @@ const PNG_SIGNATURE = '\x89PNG';
 
 test('image results carry a path, never pixels; the file is the stored frame at the defaults', async (t) => {
   const { mcp, app, env } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
-  const sid = await startGame(mcp);
+  const sid = await startGame(mcp, 'fake-maze', { allow_reset: true });
   const raw = {
     act: await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' }),
     reset: await mcp('reset', { session_id: sid, frame: 'image' }),

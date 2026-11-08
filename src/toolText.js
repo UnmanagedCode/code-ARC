@@ -32,7 +32,7 @@ export function observationText(o, frame, grid = '') {
     `state ${o.state} · levels_completed ${o.levels_completed}/${o.win_levels} · step ${o.step}`,
     `available_actions: ${list(o.available_actions)}`,
   ];
-  if (o.allow_reset === false) lines.push('allow_reset: false (one run; reset is refused)');
+  lines.push(o.allow_reset ? 'allow_reset: true' : 'allow_reset: false (one run; reset is refused)');
   if (o.full_reset) lines.push('full_reset: the whole game restarted');
   if (o.status === 'ended') lines.push(`status ended (end_reason ${o.end_reason})`);
   if (o.online) lines.push(`online: scorecard_url ${o.online.scorecard_url} · idle_close_at ${o.online.idle_close_at}`);
@@ -89,7 +89,7 @@ export function sessionsText(r, offset = 0) {
   for (const s of page) {
     const parts = [`- ${s.session_id} ${s.game_id} "${s.title}"`, s.mode, s.status];
     if (s.stalled) parts.push('stalled');
-    if (s.allow_reset === false) parts.push('allow_reset:false');
+    if (s.allow_reset) parts.push('allow_reset:true');
     if (s.end_reason) parts.push(`end_reason ${s.end_reason}`);
     if (s.state !== undefined) parts.push(`state ${s.state} · levels_completed ${s.levels_completed}/${s.win_levels}`);
     parts.push(`step ${s.step}`);

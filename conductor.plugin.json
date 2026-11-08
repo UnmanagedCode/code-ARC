@@ -106,8 +106,8 @@
             },
             "allow_reset": {
               "type": "boolean",
-              "default": true,
-              "description": "false: one run, no retries; reset is refused for the whole session."
+              "default": false,
+              "description": "true: reset allowed. Omitted or false: one run; reset is refused (RESET_DISABLED) for the whole session."
             }
           },
           "required": [
@@ -123,6 +123,7 @@
             "game_id",
             "title",
             "mode",
+            "allow_reset",
             "status",
             "state",
             "levels_completed",
@@ -151,7 +152,7 @@
               ]
             },
             "allow_reset": {
-              "const": false
+              "type": "boolean"
             },
             "status": {
               "type": "string",
@@ -418,6 +419,7 @@
             "game_id",
             "title",
             "mode",
+            "allow_reset",
             "status",
             "state",
             "levels_completed",
@@ -446,7 +448,7 @@
               ]
             },
             "allow_reset": {
-              "const": false
+              "type": "boolean"
             },
             "status": {
               "type": "string",
@@ -641,7 +643,7 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) unless the session was started with allow_reset:true. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -687,6 +689,7 @@
             "game_id",
             "title",
             "mode",
+            "allow_reset",
             "status",
             "state",
             "levels_completed",
@@ -715,7 +718,7 @@
               ]
             },
             "allow_reset": {
-              "const": false
+              "type": "boolean"
             },
             "status": {
               "type": "string",
@@ -951,6 +954,7 @@
             "game_id",
             "title",
             "mode",
+            "allow_reset",
             "status",
             "state",
             "levels_completed",
@@ -979,7 +983,7 @@
               ]
             },
             "allow_reset": {
-              "const": false
+              "type": "boolean"
             },
             "status": {
               "type": "string",
@@ -1407,6 +1411,7 @@
                   "game_id",
                   "title",
                   "mode",
+                  "allow_reset",
                   "status",
                   "end_reason",
                   "stalled",
@@ -1432,7 +1437,7 @@
                     ]
                   },
                   "allow_reset": {
-                    "const": false
+                    "type": "boolean"
                   },
                   "status": {
                     "type": "string",

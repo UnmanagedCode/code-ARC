@@ -21,6 +21,7 @@ Standalone (no cc): `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir PORT=8791 node serv
 | What | Default | Where it lives |
 |---|---|---|
 | Play mode | Local (toolkit NORMAL mode: games downloaded and run locally, in-memory scorecard) | `start_session` `online:true` opts one session into arcprize.org ONLINE mode |
+| Resets | off (one run: reset refused `RESET_DISABLED`) | `start_session` `allow_reset:true` opts one session in |
 | Frame returned by `act` | changed rows only (`diff`) | `frame` argument |
 | Live sessions | capped | `MAX_LIVE_SESSIONS` in `src/limits.js` |
 | Reasoning length | capped, plus the toolkit's own byte bound | `REASONING_MAX_CHARS` in `src/limits.js`; `MAX_REASONING_BYTES` in `arcengine` |

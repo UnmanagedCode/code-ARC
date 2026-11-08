@@ -5,7 +5,8 @@
 //   settings.png       key saved, shown masked
 //   evil.png           a hostile game title rendered as text
 //   closed.png         an online session whose scorecard was closed
-//   no-reset.png       a one-run session after GAME_OVER: list badge and header fact
+//   no-reset.png       a default (one-run) session after GAME_OVER: header fact, no list badge
+//   resets.png         a resettable session: list badge and header fact
 //   deeplink.png       ?session=&step= routing
 //   dark.png           OS dark theme (standalone fallback tokens)
 //   banner.png         toolkit banner for a diverged venv, with its fix
@@ -31,7 +32,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name), fullP
 const srv = await bootArc();
 const problems = [];
 try {
-  const maze = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-maze' }));
+  const maze = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-maze', allow_reset: true }));
   const moves = [
     ['ACTION4', 'Probing: ACTION4 probably moves the blue player right.'],
     ['ACTION4', 'Confirmed ACTION4 = right. The green cell at x=5 looks like a goal.'],
@@ -46,7 +47,7 @@ try {
   const closed = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-closed', online: true }));
   const closedAct = await mcp(srv.url, 'act', { session_id: closed, action: 'ACTION1' });
   if (closedAct.code !== 'SCORECARD_CLOSED') throw new Error(`expected SCORECARD_CLOSED, got ${JSON.stringify(closedAct)}`);
-  const lose = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-lose', allow_reset: false }));
+  const lose = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-lose' }));
   const over = await mcp(srv.url, 'act', { session_id: lose, action: 'ACTION3', reasoning: 'One run: trying left.' });
   if (!over.text?.includes('state GAME_OVER')) throw new Error(`expected GAME_OVER, got ${JSON.stringify(over)}`);
 
@@ -141,12 +142,18 @@ try {
     if (!(await link.getAttribute('href')).startsWith('https://arcprize.org/scorecards/')) problems.push('scorecard link href');
     await shot(page, 'closed.png');
 
-    // One-run session: badge in the list, fact in the header.
+    // Default (one-run) session: fact in the header, no badge in its list entry.
     await page.getByRole('button', { name: /Fake Lose/ }).click();
     await page.locator('.fact', { hasText: 'Resets: off (one run)' }).waitFor();
-    await page.locator('.badge.no-reset', { hasText: 'No reset' }).first().waitFor();
+    if (await page.getByRole('button', { name: /Fake Lose/ }).locator('.badge.resets').count()) problems.push('one-run session shows a Resets badge');
     await page.locator('#steplog button', { hasText: 'ACTION3' }).waitFor();
     await shot(page, 'no-reset.png');
+
+    // Resettable session: badge in the list, fact in the header.
+    await page.getByRole('button', { name: /Fake Maze/ }).click();
+    await page.locator('.fact', { hasText: 'Resets: on' }).waitFor();
+    await page.getByRole('button', { name: /Fake Maze/ }).locator('.badge.resets', { hasText: 'Resets' }).waitFor();
+    await shot(page, 'resets.png');
 
     // Deep link to a step.
     await page.goto(`${srv.url}/?session=${maze}&step=3`);
