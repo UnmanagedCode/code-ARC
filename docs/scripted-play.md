@@ -15,14 +15,14 @@ A step is recorded `source:"script"` when its call's `format` is `json`, else `s
 
 - The `note` tool (`session_id`, `note`: 1–`NOTE_MAX_CHARS`, not blank after trimming) opens run `k+1` and returns `{session_id, run}`. Both formats may call it; only json steps record the run.
 - A json step records the session's latest run. With no note yet it has no `run`: the viewer shows the script badge and no run header.
-- Runs never expire; a text (tool) step in between doesn't end one. The counter is per session, in memory (the runtime entry), and goes when the session ends. Notes are stored in `sessions/<sid>/notes.jsonl` as `{run, ts, text, from_step}` and announced as the SSE `note` event.
+- Runs never expire; a text (tool) step in between doesn't end one. The counter is per session, in memory (the runtime entry), and goes when the session ends. Notes are stored in `sessions/<sid>/notes.jsonl` as `{run, ts, text, from_step}` and announced as the SSE `note` event. `from_step` is the step count + 1 when the note was written; a step whose toolkit reply arrives late keeps the run current when it was issued, so a late reply from an earlier run can land at or after a later run's `from_step`.
 - Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `INVALID_ARGUMENT` (blank) → `TOO_MANY_NOTES` (`NOTES_MAX`) → `STEP_RATE_LIMITED`. A refused note stores nothing and spends no rate slot.
 - Every `note`, and every `act`/`reset` in either format, spends one slot of the per-session step rate (`STEP_RATE_MAX` per `STEP_RATE_WINDOW_MS`). A refusal is never delayed or retried by the backend.
 - `SESSION_STEPS_MAX` bounds a session's steps.
 
 ## Calling from a program
 
-- Namespace `cc.code_arc`; tool names and arguments are the MCP tools' ([protocol.md](protocol.md) → MCP tools). Results are the json `structured` data: `frame.rows` (`frame:"full"`) or `frame.changed_rows` (`frame:"diff"`), hex row strings.
+- Namespace `cc.code_arc`; tool names and arguments are the MCP tools' ([protocol.md](protocol.md) → MCP tools). Results are the json `structured` data: `frame.rows` (`frame:"full"`: hex row strings) or `frame.changed_rows` (`frame:"diff"`: `{y, row}` objects, as in [protocol.md](protocol.md) → Observation result).
 - A refusal throws cc's `ConductorError` with `.code`, `.reason`, `.status` (200), `.details` (the refusal's extras, e.g. `details.retry_after_ms`).
 - `frame:"image"` writes a PNG and returns `frame.path`; the program can't view it, so return the path and Read it after the program ends.
 - Pace calls under the step rate; on `STEP_RATE_LIMITED` wait `details.retry_after_ms` once, never loop.

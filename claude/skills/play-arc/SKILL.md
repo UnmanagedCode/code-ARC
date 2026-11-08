@@ -12,10 +12,11 @@ description: How to play ARC-AGI-3 games well with the Code ARC tools (code-arc_
 - For repetitive or search-heavy play (sweeps, searching move sequences, replaying a route), script it with `run_code` (see the `code-conductor:scripting` skill): the program calls `cc.code_arc.*` and returns a digest, not frames.
   - Call `cc.code_arc.note({session_id, note})` first, saying what the program tries and why, and again whenever its plan changes: the user follows the run through these notes, and the program's steps show as scripted under the latest one.
   - Step with `cc.code_arc.act({session_id, action, reasoning, frame})`; json results carry `frame.rows` (`full`) or `frame.changed_rows` (`diff`).
-  - Pace the acts under `STEP_RATE_MAX` per `STEP_RATE_WINDOW_MS` (a refusal states them). On `e.code === 'STEP_RATE_LIMITED'` wait `e.details.retry_after_ms` once; never loop.
+  - Pace the acts under `STEP_RATE_MAX` per `STEP_RATE_WINDOW_MS`; `note` calls spend a slot too.
   - For a picture use `frame: "image"` and Read `frame.path` after the program returns.
   - `SCRIPT_UNAVAILABLE_REMOTE` → this session's project is on a remote System: play with the tools directly.
   ```js
+  const session_id = 's-…'; // the id from start_session: a run_code program sees only `cc`
   await cc.code_arc.note({ session_id, note: 'Sweep each direction to see which cells move.' });
   const seen = [];
   for (const action of ['ACTION1', 'ACTION2', 'ACTION3', 'ACTION4']) {

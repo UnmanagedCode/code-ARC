@@ -20,7 +20,7 @@ import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
-import { bootArc, bootDiverged, bootSeeded, mcp } from './boot.mjs';
+import { bootArc, bootDiverged, bootSeeded, mcp, sessionId } from './boot.mjs';
 import { SSE_MAX_CLIENTS } from '../../src/limits.js';
 
 const { withPage } = await import(BROWSER);
@@ -31,7 +31,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name), fullP
 const srv = await bootArc();
 const problems = [];
 try {
-  const maze = (await mcp(srv.url, 'start_session', { game_id: 'fake-maze' })).structured.session_id;
+  const maze = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-maze' }));
   const moves = [
     ['ACTION4', 'Probing: ACTION4 probably moves the blue player right.'],
     ['ACTION4', 'Confirmed ACTION4 = right. The green cell at x=5 looks like a goal.'],
@@ -41,14 +41,14 @@ try {
   for (const [action, reasoning, x, y] of moves) {
     await mcp(srv.url, 'act', { session_id: maze, action, reasoning, ...(x !== undefined ? { x, y } : {}) });
   }
-  const evil = (await mcp(srv.url, 'start_session', { game_id: 'fake-evil' }, { sessionId: null, project: null })).structured.session_id;
+  const evil = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-evil' }, { sessionId: null, project: null }));
   await mcp(srv.url, 'act', { session_id: evil, action: 'ACTION6', x: 3, y: 3, reasoning: '<img src=x onerror=alert(2)> literal text' }, { sessionId: null, project: null });
-  const closed = (await mcp(srv.url, 'start_session', { game_id: 'fake-closed', online: true })).structured.session_id;
+  const closed = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-closed', online: true }));
   const closedAct = await mcp(srv.url, 'act', { session_id: closed, action: 'ACTION1' });
   if (closedAct.code !== 'SCORECARD_CLOSED') throw new Error(`expected SCORECARD_CLOSED, got ${JSON.stringify(closedAct)}`);
-  const lose = (await mcp(srv.url, 'start_session', { game_id: 'fake-lose', allow_reset: false })).structured.session_id;
+  const lose = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-lose', allow_reset: false }));
   const over = await mcp(srv.url, 'act', { session_id: lose, action: 'ACTION3', reasoning: 'One run: trying left.' });
-  if (over.structured?.state !== 'GAME_OVER') throw new Error(`expected GAME_OVER, got ${JSON.stringify(over)}`);
+  if (!over.text?.includes('state GAME_OVER')) throw new Error(`expected GAME_OVER, got ${JSON.stringify(over)}`);
 
   await withPage(async (page) => {
     page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
@@ -166,14 +166,13 @@ try {
 // runs, then a live 300-step burst (raised step rate) while the viewer follows.
 const fast = await bootArc({ entry: 'harness/playwright/server.mjs' });
 try {
-  const start = await mcp(fast.url, 'start_session', { game_id: 'fake-maze' });
-  const sid = start.structured.session_id;
+  const sid = (await mcp(fast.url, 'start_session', { game_id: 'fake-maze' }, undefined, 'json')).structured.session_id;
   const play = async (tool, args) => {
-    const out = await mcp(fast.url, tool, { session_id: sid, ...args });
+    const out = await mcp(fast.url, tool, { session_id: sid, ...args }, undefined, 'json');
     if (!out.structured) throw new Error(`script ${tool} refused: ${JSON.stringify(out)}`);
     return out.structured;
   };
-  await mcp(fast.url, 'act', { session_id: sid, action: 'ACTION4', reasoning: 'Tool move before scripting.' }, undefined, 'text');
+  await mcp(fast.url, 'act', { session_id: sid, action: 'ACTION4', reasoning: 'Tool move before scripting.' });
   // A program's step before its first note: script badge, no run header.
   await play('act', { action: 'ACTION3', reasoning: 'Early step before any note.' });
   await play('note', { note: '<img src=x onerror=alert(3)> Sweep: try each direction and watch which cells move.' });

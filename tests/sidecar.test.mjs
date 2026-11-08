@@ -34,12 +34,29 @@ test('a hung toolkit call times out, stalls the session, and health stays fast',
 test('a late reply is recorded and un-stalls the session', async (t) => {
   const { mcp, app } = await startApp(t, { deadlines: { ...DEADLINES, step: 150 } });
   const sid = await startGame(mcp, 'fake-slow');
+  ok(await mcp('note', { session_id: sid, note: 'plan' }));
   refusal(await mcp('act', { session_id: sid, action: 'ACTION4' }), 'TOOLKIT_TIMEOUT');
   assert.equal(app.store.get(sid).stalled, true);
   await until(() => app.store.get(sid).stalled === false);
   assert.equal(app.store.get(sid).step_count, 1, 'the late step is in the history');
-  assert.equal((await app.store.readSteps(sid, 1, 10))[0].action, 'ACTION4');
+  const step = (await app.store.readSteps(sid, 1, 10))[0];
+  assert.equal(step.action, 'ACTION4');
+  // Pins: the late step keeps the source and run it was issued under.
+  assert.deepEqual([step.source, step.run], ['script', 1]);
   assert.equal(ok(await mcp('observe', { session_id: sid })).step, 1);
+});
+
+// Pins: a late step belongs to the run current when it was issued, not the one current when it lands.
+test('a late reply keeps the run of its call even after a later note', async (t) => {
+  const { mcp, app } = await startApp(t, { deadlines: { ...DEADLINES, step: 150 } });
+  const sid = await startGame(mcp, 'fake-slow');
+  ok(await mcp('note', { session_id: sid, note: 'first' }));
+  refusal(await mcp('act', { session_id: sid, action: 'ACTION4' }), 'TOOLKIT_TIMEOUT');
+  assert.equal(ok(await mcp('note', { session_id: sid, note: 'second' })).run, 2);
+  await until(() => app.store.get(sid).stalled === false);
+  const step = (await app.store.readSteps(sid, 1, 10))[0];
+  assert.deepEqual([step.source, step.run], ['script', 1]);
+  assert.deepEqual((await app.store.readNotes(sid)).map((n) => [n.run, n.from_step]), [[1, 1], [2, 1]]);
 });
 
 test('a crashing toolkit ends live sessions and the next call respawns', async (t) => {

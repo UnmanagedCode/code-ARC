@@ -10,7 +10,7 @@ cc exposes each tool as `code-arc__<name>` and POSTs `{tool, arguments, caller:{
 
 | Reply | Shape |
 |---|---|
-| json success | `{structured}` only: the complete data, validated by cc against the tool's manifest `outputSchema` (scripts and the REST alias read this) |
+| json success | `{structured}` only: the complete data, validated by cc against the tool's manifest `outputSchema` (the REST alias, and so `run_code` programs, read this) |
 | text success | `{text}` only: one prose string (no `meta`), for agents; field names (`state`, `levels_completed`, `available_actions`, `frame_count`, `changed_cells`, `bbox`, …) appear verbatim |
 | refusal, either format | `{error, code, details?}`: see [Refusals](#refusals) |
 
@@ -157,7 +157,7 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 ### Note
 
-`{run, ts, text, from_step}`: the note that opened run `run` (the `note` tool); `from_step` = the session's step count + 1 when it was written (the first step the run can take). Stored in `sessions/<sid>/notes.jsonl`; `text` is stored as sent (untrimmed).
+`{run, ts, text, from_step}`: the note that opened run `run` (the `note` tool); `from_step` = the session's step count + 1 when it was written. A step whose toolkit reply arrives late is recorded under the run current when it was issued, so a late reply from an earlier run can land at or after a later run's `from_step`. Stored in `sessions/<sid>/notes.jsonl`; `text` is stored as sent (untrimmed).
 
 ### SSE events (`api/events`)
 

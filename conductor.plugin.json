@@ -346,7 +346,7 @@
       },
       {
         "name": "act",
-        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read. Called from a run_code program (json format), the step is recorded as scripted, under the session's latest note.",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -641,7 +641,7 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read. Called from a run_code program (json format), the step is recorded as scripted, under the session's latest note.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1316,7 +1316,7 @@
       },
       {
         "name": "note",
-        "description": "Open a script run on a session: a note saying what your run_code program tries next and why, shown live to the user above the steps it takes. Call it before a program's first act and again whenever its plan changes.",
+        "description": "Open a script run on a session: a note saying what your run_code program tries next and why, shown live to the user above the steps that follow.",
         "inputSchema": {
           "type": "object",
           "properties": {

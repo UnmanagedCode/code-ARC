@@ -100,7 +100,7 @@ test('note: opens runs 1, 2, 3; stored, announced and named in both views', asyn
 // order is session, ended, owner, argument.
 test('note validation and gating', async (t) => {
   const clock = fakeClock();
-  const { url, mcp, calls } = await startApp(t, { clock, timers: manualTimers });
+  const { url, mcp } = await startApp(t, { clock, timers: manualTimers });
   const sid = await start(mcp);
   for (const args of [{}, { note: '' }, { note: '   \n\t' }, { note: 'x'.repeat(NOTE_MAX_CHARS + 1) }, { note: 7 }]) {
     refusal(await mcp('note', { session_id: sid, ...args }), 'INVALID_ARGUMENT');
@@ -112,12 +112,42 @@ test('note validation and gating', async (t) => {
   clock.advance(STEP_RATE_WINDOW_MS);
 
   refusal(await mcp('note', { session_id: 's-ffffffffffff', note: 'n' }), 'SESSION_UNKNOWN');
+  refusal(await mcp('note', { session_id: 's-ffffffffffff', note: '  ' }), 'SESSION_UNKNOWN');
   refusal(await mcp('note', { session_id: sid, note: 'n' }, B), 'NOT_OWNER');
   ok(await mcp('note', { session_id: sid, note: 'null caller allowed' }, NULL));
-  assert.equal(await stepCalls(calls) > 0, true);
+  assert.deepEqual((await notesOf(url, sid)).map((n) => n.text), ['null caller allowed'], 'the null caller\'s note was recorded');
   await mcp('end_session', { session_id: sid });
   const r = refusal(await mcp('note', { session_id: sid, note: 'n' }), 'SESSION_ENDED');
   assert.equal(r.details.end_reason, 'ended_by_agent');
+});
+
+// Pins: a rate-refused note leaves the notes list and the run counter as they were.
+test('a refused note changes nothing: no stored note, no new run', async (t) => {
+  const clock = fakeClock();
+  const { url, mcp } = await startApp(t, { clock, timers: manualTimers });
+  const sid = await start(mcp);
+  ok(await mcp('note', { session_id: sid, note: 'first' }));
+  for (let i = 1; i < STEP_RATE_MAX; i++) ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
+  const before = await notesOf(url, sid);
+  refusal(await mcp('note', { session_id: sid, note: 'refused' }), 'STEP_RATE_LIMITED');
+  assert.deepEqual(await notesOf(url, sid), before);
+  clock.advance(STEP_RATE_WINDOW_MS);
+  ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
+  assert.equal((await stepsOf(url, sid, STEP_RATE_MAX))[0].run, 1, 'the next step still records the pre-refusal run');
+  assert.equal(ok(await mcp('note', { session_id: sid, note: 'second' })).run, 2, 'the next note takes the next run');
+});
+
+// Pins: with NOTES_MAX reached and the rate window full, TOO_MANY_NOTES wins over STEP_RATE_LIMITED.
+test('note gating: TOO_MANY_NOTES is checked before STEP_RATE_LIMITED', async (t) => {
+  const clock = fakeClock();
+  const { mcp } = await startApp(t, { clock, timers: manualTimers });
+  const sid = await start(mcp);
+  for (let i = 0; i < NOTES_MAX; i++) {
+    if (i % STEP_RATE_MAX === 0) clock.advance(STEP_RATE_WINDOW_MS);
+    ok(await mcp('note', { session_id: sid, note: `n${i}` }));
+  }
+  refusal(await mcp('act', { session_id: sid, action: 'ACTION1' }), 'STEP_RATE_LIMITED'); // the window is full
+  refusal(await mcp('note', { session_id: sid, note: 'one more' }), 'TOO_MANY_NOTES');
 });
 
 test(`TOO_MANY_NOTES past ${NOTES_MAX} notes; json steps still play under the last run`, async (t) => {

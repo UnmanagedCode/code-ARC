@@ -19,11 +19,18 @@ export function bootArc({ entry = 'server.js' } = {}) {
 }
 
 // Calls a tool the way cc does: POST api/mcp with the caller identity. The
-// default json format is what a run_code program gets (and is recorded as a
-// script step); 'text' is an agent's own tool call.
-export async function mcp(url, tool, args = {}, caller = { sessionId: 'demo-session', project: 'demo' }, format = 'json') {
+// The default 'text' format is an agent's own tool call (a tool step); 'json'
+// is what a run_code program gets (recorded as a script step).
+export async function mcp(url, tool, args = {}, caller = { sessionId: 'demo-session', project: 'demo' }, format = 'text') {
   const res = await fetch(`${url}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool, arguments: args, caller, format }) });
   return res.json();
+}
+
+// The session id in a text-format reply (or a refusal, which throws).
+export function sessionId(reply) {
+  const m = /Session (s-[0-9a-f]{12})/.exec(reply.text || '');
+  if (!m) throw new Error(`no session in reply: ${JSON.stringify(reply)}`);
+  return m[1];
 }
 
 // Boots a throwaway copy of the backend whose .venv is a symlink to an empty
