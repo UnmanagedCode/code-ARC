@@ -137,7 +137,8 @@ export function createSessions({
     // `n` first: the store pages by a line prefix.
     const step = { n, ts: iso(), action, ...tag, ...args, ...lastSummary(obs), frame: obs.frame };
     const prev = store.lastFrame(id);
-    await store.appendStep(id, step);
+    // The animation is stored but never published: SSE and step pages carry the last frame only.
+    await store.appendStep(id, { ...step, anim: obs.anim });
     const now = iso();
     const next = await store.update(id, { step_count: n, last: lastSummary(obs), updated_at: now, last_activity_at: now, stalled: false });
     hub.publish('step', { session_id: id, step });
@@ -381,11 +382,18 @@ export function createSessions({
       return runStep(id, g.meta, g.r, 'reset', 'RESET', args, {}, tagOf(id, caller));
     },
 
-    // Open to every caller, ended sessions included.
-    observe({ session_id: id }) {
+    // Open to every caller, ended sessions included. With `animation` the
+    // result also carries `animation` {step, anim, frame, frame_count}: the
+    // stored frames of step `animation_step` (default the latest). A read, not a step.
+    async observe({ session_id: id, animation, animation_step: animStep }) {
       const meta = store.get(id);
       if (!meta) return refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids');
-      return observed(meta);
+      const r = observed(meta);
+      if (animation !== 'all') return r;
+      if (animStep === undefined) animStep = meta.step_count;
+      const stored = animStep > meta.step_count ? null : await store.readStep(id, animStep);
+      if (!stored) return refuse('STEP_UNKNOWN', `no such step; the latest is ${meta.step_count}`, { step: meta.step_count });
+      return { ...r, animation: { step: animStep, anim: stored.anim, frame: stored.frame, frame_count: stored.frame_count } };
     },
 
     // Opens run k+1 under this note: the json-format steps that follow record

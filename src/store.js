@@ -5,29 +5,40 @@
 //   sessions/<sid>/notes.jsonl  append-only, one line per script run note
 // A step line stores its frame as `frame_z` (base64 raw deflate of the rows
 // joined by '\n'); every step this module hands out has `frame` rows again.
-// Lines written with a plain `frame` still read.
+// Lines written with a plain `frame` still read. The frames of a multi-frame
+// action before the last ride in `anim_z` (one deflate stream over all of
+// them, blank-line separated); only readStep hands them out, as `anim`.
 // The latest frame of each session is kept in memory for observe and diffs.
 import { promises as fs, createReadStream } from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { writeFileAtomic, readJsonBounded } from './atomicFile.js';
-import { COORD_MAX, SESSION_ID_RE } from './limits.js';
+import { ANIMATION_FRAMES_MAX, COORD_MAX, SESSION_ID_RE } from './limits.js';
 
 const META_MAX_BYTES = 64 * 1024;
 // A step line holds one compressed frame (typically well under 1 KB) plus up
 // to REASONING_MAX_CHARS of reasoning, and a legacy line a ~4.2 KB plain
 // frame; read this much of the file's tail to find the last one.
 const TAIL_READ_BYTES = 256 * 1024;
+// A step line with a full animation of random frames is about 190 KB (plus up
+// to REASONING_MAX_CHARS of reasoning), inside TAIL_READ_BYTES; when the first
+// window still holds no complete last line, the tail is re-read this wide.
+const STEP_LINE_MAX_BYTES = 512 * 1024;
 // Step lines start with their number (`record` in src/sessions.js builds `n`
 // first), so paging skips earlier lines without parsing them.
 const STEP_N = /^\{"n":(\d+),/;
 
 function encodeStep(step) {
+  const { frame, anim, ...rest } = step;
+  const out = { ...rest };
   // An empty frame has no rows to join; it stays plain.
-  if (!Array.isArray(step.frame) || step.frame.length === 0) return JSON.stringify(step);
-  const { frame, ...rest } = step;
-  return JSON.stringify({ ...rest, frame_z: deflateRawSync(frame.join('\n')).toString('base64') });
+  if (!Array.isArray(frame) || frame.length === 0) out.frame = frame;
+  else out.frame_z = deflateRawSync(frame.join('\n')).toString('base64');
+  if (Array.isArray(anim) && anim.length > 0) {
+    out.anim_z = deflateRawSync(anim.map((f) => f.join('\n')).join('\n\n')).toString('base64');
+  }
+  return JSON.stringify(out);
 }
 
 // A frame is at most FRAME_SIDE rows of at most FRAME_SIDE palette digits.
@@ -46,16 +57,28 @@ function inflateFrame(z) {
   }
 }
 
+// The leading frames of `anim_z`, or null when corrupt, oversized or invalid.
+function inflateAnim(z) {
+  try {
+    const max = (ANIMATION_FRAMES_MAX - 1) * (FRAME_TEXT_MAX + 2);
+    const frames = inflateRawSync(Buffer.from(z, 'base64'), { maxOutputLength: max }).toString('utf8').split('\n\n').map((f) => f.split('\n'));
+    return frames.length <= ANIMATION_FRAMES_MAX - 1 && frames.every(validFrame) ? frames : null;
+  } catch {
+    return null;
+  }
+}
+
 // One stored line back to a step with `frame` rows. Throws on malformed JSON;
 // a frame that is corrupt, oversized or not hex rows reads as `frame: null`.
-function decodeStep(line) {
-  const step = JSON.parse(line);
-  if (typeof step.frame_z === 'string') {
-    const { frame_z: z, ...rest } = step;
-    return { ...rest, frame: inflateFrame(z) };
-  }
-  if (step.frame !== undefined && step.frame !== null && !validFrame(step.frame)) return { ...step, frame: null };
-  return step;
+// `anim_z` is always stripped; with `anim: true` it comes back as `anim` (an
+// array of frames, or null when it can't be read; absent when never stored).
+function decodeStep(line, { anim = false } = {}) {
+  const { anim_z: animZ, ...step } = JSON.parse(line);
+  const out = typeof step.frame_z === 'string'
+    ? (({ frame_z: z, ...rest }) => ({ ...rest, frame: inflateFrame(z) }))(step)
+    : step.frame !== undefined && step.frame !== null && !validFrame(step.frame) ? { ...step, frame: null } : step;
+  if (anim && typeof animZ === 'string') out.anim = inflateAnim(animZ);
+  return out;
 }
 
 export async function ensureDir(dir) {
@@ -63,6 +86,8 @@ export async function ensureDir(dir) {
   await fs.chmod(dir, 0o700);
 }
 
+// The file's last line: null when the file is missing or empty, undefined when
+// it has content but no whole last line fits the tail windows.
 async function lastLine(file) {
   let fh;
   try {
@@ -73,11 +98,21 @@ async function lastLine(file) {
   }
   try {
     const { size } = await fh.stat();
-    const len = Math.min(size, TAIL_READ_BYTES);
-    const buf = Buffer.alloc(len);
-    await fh.read(buf, 0, len, size - len);
-    const lines = buf.toString('utf8').split('\n').filter(Boolean);
-    return lines.length ? lines[lines.length - 1] : null;
+    // The last line in the file's final `want` bytes; `whole` is false when it
+    // may start before the window.
+    const tail = async (want) => {
+      const len = Math.min(size, want);
+      const buf = Buffer.alloc(len);
+      await fh.read(buf, 0, len, size - len);
+      const text = buf.toString('utf8');
+      const lines = text.split('\n').filter(Boolean);
+      if (!lines.length) return { line: null, whole: true };
+      return { line: lines[lines.length - 1], whole: len === size || lines.length > 1 };
+    };
+    const first = await tail(TAIL_READ_BYTES);
+    if (first.whole) return first.line;
+    const wide = await tail(Math.min(size, STEP_LINE_MAX_BYTES));
+    return wide.whole ? wide.line : undefined;
   } finally {
     await fh.close();
   }
@@ -126,13 +161,16 @@ export function createStore({ dataDir, log = console }) {
           await writeMeta(meta);
         }
         metas.set(id, meta);
-        const line = await lastLine(path.join(dirOf(id), 'steps.jsonl'));
-        if (line) {
+        const file = path.join(dirOf(id), 'steps.jsonl');
+        const line = await lastLine(file);
+        if (line === undefined) {
+          log.error(`[code-arc] session ${id}: the newest step line is unreadable (oversized or torn); no last frame restored`);
+        } else if (line) {
           try {
             const step = decodeStep(line);
             if (Array.isArray(step.frame)) lastFrames.set(id, step.frame);
-          } catch {
-            log.error(`[code-arc] session ${id}: last step line is malformed`);
+          } catch (e) {
+            log.error(`[code-arc] session ${id}: the newest step line is unreadable: ${e.message}`);
           }
         }
       }
@@ -234,6 +272,38 @@ export function createStore({ dataDir, log = console }) {
         stream.destroy();
       }
       return out;
+    },
+
+    // One step by number with its animation (`anim`: frames before the last, or
+    // null when unreadable; absent when none were stored), or null.
+    async readStep(id, n) {
+      const file = path.join(dirOf(id), 'steps.jsonl');
+      const lastLn = await lastLine(file);
+      const m = typeof lastLn === 'string' ? STEP_N.exec(lastLn) : null;
+      if (m && Number(m[1]) === n) {
+        try { return decodeStep(lastLn, { anim: true }); } catch { /* fall through to the scan */ }
+      }
+      try {
+        await fs.access(file);
+      } catch {
+        return null;
+      }
+      const stream = createReadStream(file, { encoding: 'utf8' });
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      try {
+        for await (const line of rl) {
+          if (!line) continue;
+          const lm = STEP_N.exec(line);
+          if (lm && Number(lm[1]) !== n) continue;
+          let step;
+          try { step = decodeStep(line, { anim: true }); } catch { continue; }
+          if (step.n === n) return step;
+        }
+      } finally {
+        rl.close();
+        stream.destroy();
+      }
+      return null;
     },
 
     // Resolves once every queued write has landed.

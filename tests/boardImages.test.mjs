@@ -198,3 +198,40 @@ test('images/ swapped for a symlink after start is refused by write and prune; t
   assert.match(log.text(), /pruning board images of s-[0-9a-f]+ failed: .*not a real directory/);
   assert.deepEqual(await snapshotTree(victim), before, `prune did not remove victim/${sid}`);
 });
+
+// --- contact sheets ---------------------------------------------------------
+test('a sheet write keeps the board image; each kind unlinks only its own previous file', async (t) => {
+  const { img, dir } = await images(t);
+  const frames = [{ index: 0, rows: ROWS }, { index: 1, rows: ROWS }];
+  const board1 = await img.write(SID, 1, ROWS, OPTS);
+  const sheet1 = await img.writeSheet(SID, 1, frames, OPTS);
+  assert.match(path.basename(sheet1.path), /^anim-1-\d+\.png$/);
+  assert.ok(await exists(board1.path), 'the sheet did not remove the board image');
+  const board2 = await img.write(SID, 2, ROWS, OPTS);
+  assert.equal(await exists(board1.path), false, 'a board write removes the previous board image');
+  assert.ok(await exists(sheet1.path), 'and keeps the sheet');
+  const sheet2 = await img.writeSheet(SID, 2, frames, OPTS);
+  assert.equal(await exists(sheet1.path), false);
+  assert.deepEqual((await fs.readdir(path.join(dir, SID))).sort(), [path.basename(board2.path), path.basename(sheet2.path)].sort());
+  assert.notEqual(sheet2.path, sheet1.path, 'the shared seq keeps paths unique');
+});
+
+test('a planted symlink as the session dir refuses the sheet, and prune removes both kinds', async (t) => {
+  const { img, dir, env } = await images(t);
+  const frames = [{ index: 0, rows: ROWS }];
+  await img.write(SID, 1, ROWS, OPTS);
+  await img.writeSheet(SID, 1, frames, OPTS);
+  await img.prune(SID);
+  assert.equal(await exists(path.join(dir, SID)), false);
+  const victim = path.join(env.tmp, 'victim');
+  await fs.mkdir(victim);
+  await fs.symlink(victim, path.join(dir, SID));
+  await assert.rejects(img.writeSheet(SID, 2, frames, OPTS), /not a real directory/);
+  assert.deepEqual(await fs.readdir(victim), []);
+});
+
+test('a sheet write for a session that is no longer live writes nothing', async (t) => {
+  const { img, dir } = await images(t, { live: () => false });
+  assert.deepEqual(await img.writeSheet(SID, 1, [{ index: 0, rows: ROWS }], OPTS), { ended: true });
+  assert.deepEqual(await fs.readdir(dir), []);
+});

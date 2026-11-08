@@ -3,7 +3,7 @@
 A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that lets agents play **ARC-AGI-3** games through the official `arc-agi` toolkit, while you watch: the live frame, every action, the agent's reasoning, and a replay scrubber.
 
 - **For agents:** MCP tools (`code-arc__list_games`, `code-arc__start_session`, `code-arc__act`, …) plus a `play-arc` skill that teaches good play. Scripted play goes through cc's `run_code`.
-- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, and replay.
+- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, replay, and frame-by-frame animation replay.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
 Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/scripted-play.md](docs/scripted-play.md) (scripted play through `run_code`) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests) · [docs/bundle.md](docs/bundle.md) (bundle: install and games without the web).
@@ -23,6 +23,7 @@ Standalone (no cc): `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir PORT=8791 node serv
 | Play mode | Local (toolkit NORMAL mode: games downloaded and run locally, in-memory scorecard) | `start_session` `online:true` opts one session into arcprize.org ONLINE mode |
 | Resets | off (one run: reset refused `RESET_DISABLED`) | `start_session` `allow_reset:true` opts one session in |
 | Frame returned by `act` | changed rows only (`diff`) | `frame` argument |
+| Animation returned by `act`/`observe` | last frame only; the `animation` argument adds at most `ANIMATION_PAGE_MAX` frames per call | `animation` argument; `src/limits.js` |
 | Live sessions | capped | `MAX_LIVE_SESSIONS` in `src/limits.js` |
 | Reasoning length | capped, plus the toolkit's own byte bound | `REASONING_MAX_CHARS` in `src/limits.js`; `MAX_REASONING_BYTES` in `arcengine` |
 | Online rate limit / idle close | refused locally / session ended | `ONLINE_RPM_LIMIT`, `ONLINE_IDLE_CLOSE_MS` in `src/online.js` |
@@ -60,7 +61,7 @@ For a host without network: on a machine with network run `node scripts/bundle.m
 
 ## Known limitations
 
-- Agents see only the **last** frame of a multi-frame action (`frame_count` says how many there were).
+- A step stores at most `ANIMATION_FRAMES_MAX` animation frames (the first ones and the last); steps recorded before animations were stored have only their last frame.
 - Steps are stored compressed and capped per session (`SESSION_STEPS_MAX`); there is still no retention across sessions: every session's steps stay in the data dir until you delete them.
 - Scripted play uses cc's `run_code`, which cc refuses (`SCRIPT_UNAVAILABLE_REMOTE`) for a session whose project lives on a remote System; those workers play with the tools directly.
 - The **script** badge follows cc's json format: a json MCP client that isn't a `run_code` program shows as script.

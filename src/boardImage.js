@@ -28,12 +28,16 @@ function int(v, min, where) {
 
 // The spec with colours parsed; throws on a malformed spec.
 function compile(spec) {
-  const { palette, scale, grid: g } = spec;
+  const { palette, scale, grid: g, sheet } = spec;
   if (!Array.isArray(palette) || palette.length !== 16) fail('palette must list 16 colours');
   if (!Array.isArray(g?.contrast) || g.contrast.length !== 16) fail('grid.contrast must list 16 colours');
   int(scale?.min, 1, 'scale.min');
   if (int(scale.max, scale.min, 'scale.max') < int(scale.default, scale.min, 'scale.default')) fail('scale.default must be <= scale.max');
   if (typeof g.default !== 'boolean') fail('grid.default must be a boolean');
+  int(sheet?.columns, 1, 'sheet.columns');
+  int(sheet.gap, 0, 'sheet.gap');
+  int(sheet.scale_default, scale.min, 'sheet.scale_default');
+  if (int(sheet.scale_max, sheet.scale_default, 'sheet.scale_max') > scale.max) fail('sheet.scale_max must be <= scale.max');
   const glyphs = {};
   let glyphWidth = null;
   for (const d of DIGITS) {
@@ -54,6 +58,8 @@ function compile(spec) {
     dash: int(g.dash, 1, 'grid.dash'),
     fontScale: int(g.font_scale, 1, 'grid.font_scale'),
     labelOffset: int(g.label_offset, 0, 'grid.label_offset'),
+    columns: sheet.columns,
+    gap: sheet.gap,
     glyphs,
     glyphAdvance: glyphWidth + 1,
   };
@@ -73,6 +79,21 @@ function digitsOf(rows) {
     for (let x = 0; x < W; x++) out[y * W + x] = parseInt(r[x], 16);
   });
   return { digits: out, H: rows.length, W };
+}
+
+// Draws `n` in decimal at (ox, oy) with the grid's glyphs through `put(x, y, rgb)`.
+function drawNumber(put, n, ox, oy) {
+  [...String(n)].forEach((d, i) => {
+    const dx = ox + i * S.glyphAdvance * S.fontScale;
+    S.glyphs[d].forEach((glyphRow, gy) => {
+      for (let gx = 0; gx < glyphRow.length; gx++) {
+        if (glyphRow[gx] !== '#') continue;
+        for (let a = 0; a < S.fontScale; a++) {
+          for (let b = 0; b < S.fontScale; b++) put(dx + gx * S.fontScale + a, oy + gy * S.fontScale + b, S.labelRgb);
+        }
+      }
+    });
+  });
 }
 
 // {width, height, rgb} (rgb row-major, 3 bytes a pixel).
@@ -122,19 +143,7 @@ export function renderBoard(rows, { scale, grid }) {
   }
 
   // Ticks and decimal labels in the margins, clipped to the image.
-  const label = (n, ox, oy) => {
-    [...String(n)].forEach((d, i) => {
-      const dx = ox + i * S.glyphAdvance * S.fontScale;
-      S.glyphs[d].forEach((glyphRow, gy) => {
-        for (let gx = 0; gx < glyphRow.length; gx++) {
-          if (glyphRow[gx] !== '#') continue;
-          for (let a = 0; a < S.fontScale; a++) {
-            for (let b = 0; b < S.fontScale; b++) put(dx + gx * S.fontScale + a, oy + gy * S.fontScale + b, S.labelRgb);
-          }
-        }
-      });
-    });
-  };
+  const label = (n, ox, oy) => drawNumber(put, n, ox, oy);
   for (let c = 0; c < W; c += S.every) {
     for (let y = M - S.tickLen; y < M; y++) put(M + c * s, y, S.labelRgb);
     label(c, M + c * s + S.labelOffset, S.labelOffset);
@@ -148,5 +157,35 @@ export function renderBoard(rows, { scale, grid }) {
 
 export function boardPng(rows, opts) {
   const { width, height, rgb } = renderBoard(rows, opts);
+  return encodePng(width, height, rgb);
+}
+
+// A contact sheet of `frames` ([{index, rows}], at least one): each tile is the
+// board render under its frame index, tiles in rows of sheet.columns on the
+// grid's margin colour. Tiles of mixed shapes sit top-left in cells of the
+// largest tile's size. {width, height, rgb}.
+export function renderSheet(frames, opts) {
+  if (!Array.isArray(frames) || frames.length === 0) throw new Error('a contact sheet needs at least one frame');
+  const tiles = frames.map((f) => ({ index: f.index, ...renderBoard(f.rows, opts) }));
+  const strip = S.glyphs[DIGITS[0]].length * S.fontScale + 2 * S.labelOffset;
+  const cellW = Math.max(...tiles.map((t) => t.width));
+  const cellH = strip + Math.max(...tiles.map((t) => t.height));
+  const cols = Math.min(S.columns, tiles.length);
+  const rowsN = Math.ceil(tiles.length / cols);
+  const width = S.gap + cols * (cellW + S.gap);
+  const height = S.gap + rowsN * (cellH + S.gap);
+  const rgb = Buffer.alloc(width * height * 3);
+  for (let i = 0; i < width * height; i++) rgb.set(S.marginRgb, i * 3);
+  tiles.forEach((t, i) => {
+    const ox = S.gap + (i % cols) * (cellW + S.gap);
+    const oy = S.gap + Math.floor(i / cols) * (cellH + S.gap);
+    drawNumber((x, y, c) => { if (x >= 0 && y >= 0 && x < width && y < height) rgb.set(c, (y * width + x) * 3); }, t.index, ox + S.labelOffset, oy + S.labelOffset);
+    for (let y = 0; y < t.height; y++) t.rgb.copy(rgb, ((oy + strip + y) * width + ox) * 3, y * t.width * 3, (y + 1) * t.width * 3);
+  });
+  return { width, height, rgb };
+}
+
+export function sheetPng(frames, opts) {
+  const { width, height, rgb } = renderSheet(frames, opts);
   return encodePng(width, height, rgb);
 }

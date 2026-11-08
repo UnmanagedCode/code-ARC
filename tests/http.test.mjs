@@ -216,3 +216,40 @@ test('with thousands of stored sessions the viewer stream stays up and pages thr
   assert.equal(seen[0], sid);
   assert.equal((await json(`${url}/api/sessions?before=nope`)).status, 400);
 });
+
+test('frames route: every stored frame of a step with its toolkit index; unknown step is STEP_UNKNOWN', async (t) => {
+  const { url, mcp } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
+  const maze = await startGame(mcp);
+  await mcp('act', { session_id: maze, action: 'ACTION4' });
+  const two = (await json(`${url}/api/sessions/${maze}/steps/1/frames`)).body;
+  assert.deepEqual([two.n, two.frame_count, two.stored, two.omitted], [1, 2, 2, 0]);
+  assert.deepEqual(two.frames.map((f) => f.index), [0, 1]);
+  assert.ok(two.frames.every((f) => f.rows.length === 64));
+  const start = (await json(`${url}/api/sessions/${maze}/steps/0/frames`)).body;
+  assert.deepEqual(start.frames.map((f) => f.index), [0]);
+
+  const long = await startGame(mcp, 'fake-anim');
+  await mcp('act', { session_id: long, action: 'ACTION1' });
+  const gap = (await json(`${url}/api/sessions/${long}/steps/1/frames`)).body;
+  assert.deepEqual([gap.frame_count, gap.stored, gap.omitted, gap.frames.length], [70, 64, 6, 64]);
+  assert.equal(gap.frames.at(-1).index, 69);
+
+  const missing = await json(`${url}/api/sessions/${maze}/steps/9/frames`);
+  assert.equal(missing.status, 404);
+  assert.equal(missing.body.code, 'STEP_UNKNOWN');
+  assert.equal((await json(`${url}/api/sessions/s-000000000000/steps/0/frames`)).body.code, 'SESSION_UNKNOWN');
+});
+
+test('step pages and the SSE step event carry the last frame only, never the animation', async (t) => {
+  const { url, mcp } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
+  const sid = await startGame(mcp);
+  const events = await sseCollect(`${url}/api/events`, (evs) => evs.some((e) => e.event === 'step'), {
+    onEvent: async (ev) => { if (ev.event === 'sessions') await mcp('act', { session_id: sid, action: 'ACTION4' }); },
+  });
+  const step = events.find((e) => e.event === 'step').data.step;
+  assert.equal(step.frame_count, 2);
+  assert.ok(!('anim' in step) && !('anim_z' in step));
+  const page = (await json(`${url}/api/sessions/${sid}/steps`)).body.steps;
+  assert.ok(page.every((s) => !('anim' in s) && !('anim_z' in s)));
+  assert.equal(page[1].frame.length, 64);
+});

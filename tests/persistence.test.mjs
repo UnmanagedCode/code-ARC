@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
+import { randomBytes } from 'node:crypto';
+import { createStore } from '../src/store.js';
+import { ANIMATION_FRAMES_MAX } from '../src/limits.js';
 import { freshEnv, json, ok, refusal, sendJsonReq, startApp, startGame } from './_helpers.mjs';
 
 test('sessions and steps survive a restart; live sessions end as backend_restart', async (t) => {
@@ -165,4 +168,168 @@ test('a legacy meta without allow_reset reads as resets allowed', async (t) => {
   assert.equal(ok(await mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === id).allow_reset, true);
   assert.equal('allow_reset' in (await json(`${url}/api/sessions/${id}`)).body, false);
   assert.equal('allow_reset' in JSON.parse(await fs.readFile(file, 'utf8')), false);
+});
+
+// --- animation frames (anim_z) ---------------------------------------------
+
+const SID = 's-0123456789ab';
+const gridRows = (seed) => Array.from({ length: 64 }, (_, y) => Array.from({ length: 64 }, (_, x) => ((x + y + seed) % 16).toString(16)).join(''));
+// Incompressible frames: random hex digits.
+const noisy = () => Array.from({ length: 64 }, () => randomBytes(32).toString('hex'));
+
+async function storeAt(t, env) {
+  env = env || (await freshEnv(t));
+  const store = createStore({ dataDir: env.dataDir, log: { error() {} } });
+  await store.init();
+  return { env, store, file: path.join(env.dataDir, 'sessions', SID, 'steps.jsonl') };
+}
+const newSession = (store) => store.create({ id: SID, status: 'ended', created_at: 'x', step_count: 0 });
+const rawLines = async (file) => (await fs.readFile(file, 'utf8')).split('\n').filter(Boolean);
+
+test('a multi-frame step line holds frame_z and anim_z, never anim; readSteps hands out neither anim nor anim_z', async (t) => {
+  const { store, file } = await storeAt(t);
+  await newSession(store);
+  const anim = [gridRows(1), gridRows(2)];
+  await store.appendStep(SID, { n: 0, action: 'ACTION1', frame: gridRows(3), anim });
+  await store.flush();
+  const [line] = await rawLines(file);
+  assert.match(line, /^\{"n":0,/, 'n stays the first key');
+  const raw = JSON.parse(line);
+  assert.equal(typeof raw.frame_z, 'string');
+  assert.equal(typeof raw.anim_z, 'string');
+  assert.ok(!('anim' in raw) && !('frame' in raw));
+  const [step] = await store.readSteps(SID, 0, 10);
+  assert.deepEqual(step.frame, gridRows(3));
+  assert.ok(!('anim' in step) && !('anim_z' in step));
+});
+
+test('readStep returns the animation by the tail path and by the scan path', async (t) => {
+  const { store } = await storeAt(t);
+  await newSession(store);
+  const a0 = [gridRows(1)];
+  const a1 = [gridRows(4), gridRows(5)];
+  await store.appendStep(SID, { n: 0, action: 'ACTION1', frame: gridRows(2), anim: a0 });
+  await store.appendStep(SID, { n: 1, action: 'ACTION2', frame: gridRows(6), anim: a1 });
+  await store.flush();
+  assert.deepEqual((await store.readStep(SID, 1)).anim, a1, 'tail path: the last line');
+  const scanned = await store.readStep(SID, 0);
+  assert.deepEqual(scanned.anim, a0, 'scan path: an earlier line');
+  assert.deepEqual(scanned.frame, gridRows(2));
+  assert.equal(await store.readStep(SID, 2), null);
+  assert.equal(await store.readStep('s-000000000000', 0), null);
+});
+
+test('lastFrame is the last frame of the newest step, after an append and after a restart', async (t) => {
+  const { env, store } = await storeAt(t);
+  await newSession(store);
+  await store.appendStep(SID, { n: 0, action: 'A', frame: gridRows(1), anim: [gridRows(9)] });
+  assert.deepEqual(store.lastFrame(SID), gridRows(1));
+  await store.flush();
+  const again = await storeAt(t, env);
+  assert.deepEqual(again.store.lastFrame(SID), gridRows(1));
+});
+
+test('a last line longer than the tail window still restores lastFrame on init', async (t) => {
+  const { env, store, file } = await storeAt(t);
+  await newSession(store);
+  const anim = Array.from({ length: ANIMATION_FRAMES_MAX - 1 }, noisy);
+  await store.appendStep(SID, { n: 0, action: 'A', frame: gridRows(1) });
+  // A full animation of random frames is ~190 KB; the padding stands in for a
+  // line that outgrows the 256 KiB tail window.
+  await store.appendStep(SID, { n: 1, action: 'B', frame: gridRows(2), anim, pad: 'x'.repeat(100 * 1024) });
+  await store.flush();
+  const last = (await rawLines(file)).at(-1);
+  assert.ok(last.length > 256 * 1024, `the line (${last.length} bytes) must exceed the 256 KiB tail window`);
+  assert.ok(last.length < 512 * 1024, 'and fit the fallback window');
+  const again = await storeAt(t, env);
+  assert.deepEqual(again.store.lastFrame(SID), gridRows(2));
+  assert.deepEqual((await again.store.readStep(SID, 1)).anim, anim);
+});
+
+test('old lines read: plain frame, and frame_z without anim_z (anim is absent, not null)', async (t) => {
+  const env = await freshEnv(t);
+  const dir = path.join(env.dataDir, 'sessions', SID);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: 1 }));
+  const z = deepZ(gridRows(2));
+  await fs.writeFile(path.join(dir, 'steps.jsonl'), `${JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) })}\n${JSON.stringify({ n: 1, action: 'B', frame_z: z })}\n`);
+  const { store } = await storeAt(t, env);
+  assert.deepEqual(store.lastFrame(SID), gridRows(2));
+  const plain = await store.readStep(SID, 0);
+  assert.deepEqual(plain.frame, gridRows(1));
+  assert.equal(plain.anim, undefined);
+  assert.equal((await store.readStep(SID, 1)).anim, undefined);
+  assert.deepEqual((await store.readSteps(SID, 0, 5)).map((s) => s.n), [0, 1]);
+});
+function deepZ(rows) { return deflateRawSync(rows.join('\n')).toString('base64'); }
+
+test('a corrupt, oversized or invalid anim_z reads as anim: null with the frame intact', async (t) => {
+  const env = await freshEnv(t);
+  const dir = path.join(env.dataDir, 'sessions', SID);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: 3 }));
+  const f = gridRows(1);
+  const bomb = deflateRawSync(Buffer.alloc(2 * 1024 * 1024, 0x30)).toString('base64');
+  const lines = [
+    { n: 0, frame_z: deepZ(f), anim_z: 'not base64 deflate' },
+    { n: 1, frame_z: deepZ(f), anim_z: bomb },
+    { n: 2, frame_z: deepZ(f), anim_z: deepZ(['zz not hex']) },
+    { n: 3, frame_z: deepZ(f), anim_z: deflateRawSync(Array(ANIMATION_FRAMES_MAX).fill('11').join('\n\n')).toString('base64') },
+  ];
+  await fs.writeFile(path.join(dir, 'steps.jsonl'), lines.map((l) => `${JSON.stringify(l)}\n`).join(''));
+  const { store } = await storeAt(t, env);
+  for (const n of [0, 1, 2, 3]) {
+    const s = await store.readStep(SID, n);
+    assert.equal(s.anim, null, `step ${n}`);
+    assert.deepEqual(s.frame, f, `step ${n} keeps its last frame`);
+  }
+});
+
+test('frames inside anim_z are separated by a blank line, so rows and frames never mix', async (t) => {
+  const { store } = await storeAt(t);
+  await newSession(store);
+  await store.appendStep(SID, { n: 0, action: 'A', frame: ['00'], anim: [['11', '22'], ['33']] });
+  await store.flush();
+  assert.deepEqual((await store.readStep(SID, 0)).anim, [['11', '22'], ['33']]);
+});
+
+async function sessionWith(t, lines) {
+  const env = await freshEnv(t);
+  const dir = path.join(env.dataDir, 'sessions', SID);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: lines.length - 1 }));
+  await fs.writeFile(path.join(dir, 'steps.jsonl'), lines.map((l) => `${l}\n`).join(''));
+  const logged = [];
+  const store = createStore({ dataDir: env.dataDir, log: { error: (m) => logged.push(m) } });
+  await store.init();
+  return { store, logged };
+}
+
+test('a newest line longer than every tail window: init logs it unreadable and restores no frame; readStep still serves the earlier step', async (t) => {
+  const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
+  const huge = JSON.stringify({ n: 1, action: 'B', frame: gridRows(2), pad: 'x'.repeat(700 * 1024) });
+  const { store, logged } = await sessionWith(t, [ok0, huge]);
+  assert.equal(store.lastFrame(SID), null, 'neither a fragment nor the older step\'s frame');
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable \\(oversized or torn\\)`));
+  assert.deepEqual((await store.readStep(SID, 0)).frame, gridRows(1));
+});
+
+test('an oversized corrupt newest line after valid steps never surfaces the previous step\'s frame', async (t) => {
+  const steps = [0, 1, 2].map((n) => JSON.stringify({ n, action: 'A', frame: gridRows(n) }));
+  const corrupt = `{"n":3,"action":"B","pad":"${'x'.repeat(700 * 1024)}`; // torn: no closing
+  const { store, logged } = await sessionWith(t, [...steps, corrupt]);
+  assert.equal(store.lastFrame(SID), null);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], /unreadable \(oversized or torn\)/);
+  assert.deepEqual((await store.readStep(SID, 2)).frame, gridRows(2), 'earlier steps stay readable by step number');
+});
+
+test('a short malformed newest line: init logs the decode error (not the oversized/torn wording) and restores no frame', async (t) => {
+  const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
+  const { store, logged } = await sessionWith(t, [ok0, '{"n":1,"action":"B","frame":']);
+  assert.equal(store.lastFrame(SID), null);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable: .+`));
+  assert.doesNotMatch(logged[0], /oversized or torn/);
 });

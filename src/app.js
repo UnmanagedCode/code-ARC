@@ -3,6 +3,7 @@
 import http from 'node:http';
 import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
+import { stepFrames } from './animation.js';
 import { createBoardImages } from './boardImages.js';
 import { createBootstrap } from './bootstrap.js';
 import { createKeyStore } from './keyStore.js';
@@ -97,6 +98,14 @@ export async function createApp({
       const from = Math.max(0, Number.parseInt(url.searchParams.get('from') || '0', 10) || 0);
       const limit = Math.min(STEPS_PAGE_MAX, Math.max(1, Number.parseInt(url.searchParams.get('limit') || String(STEPS_PAGE_MAX), 10) || STEPS_PAGE_MAX));
       sendJson(res, 200, { steps: await store.readSteps(params.id, from, limit) });
+    }],
+    // Every stored frame of one step (at most ANIMATION_FRAMES_MAX), for the viewer's replay.
+    ['GET', sessionRoute('/steps/(?<n>\\d+)/frames'), async (req, res, { params }) => {
+      sessionOr404(params.id);
+      const n = Number(params.n);
+      const step = Number.isSafeInteger(n) ? await store.readStep(params.id, n) : null;
+      if (!step) throw new HttpError(404, 'STEP_UNKNOWN', 'no such step');
+      sendJson(res, 200, { n, frame_count: step.frame_count, ...stepFrames(step) });
     }],
     ['GET', sessionRoute('/notes'), async (req, res, { params }) => {
       sessionOr404(params.id);

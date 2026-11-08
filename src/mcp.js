@@ -10,6 +10,7 @@
 // connect with ?format=text), so its steps are recorded as scripted. A handler returns a service refusal as-is, or a view
 // pair {json, text}: only the requested view is built.
 import manifest from '../conductor.plugin.json' with { type: 'json' };
+import { animationData, animationNotes, animationText, animationView } from './animation.js';
 import { IMAGE_SPEC } from './boardImage.js';
 import { frameData, frameText } from './frames.js';
 import { observationFields } from './observation.js';
@@ -34,6 +35,12 @@ const misplacedImageOptions = (a) => (a.frame !== 'image' && (a.image_scale !== 
   ? refuse('INVALID_ARGUMENT', "image_scale and image_grid apply to frame:'image' only")
   : null);
 
+// animation_step and animation_from apply to animation:'all' only (the manifest
+// gives them no default, so a stray one is still visible here).
+const misplacedAnimationOptions = (a) => (a.animation !== 'all' && (a.animation_step !== undefined || a.animation_from !== undefined)
+  ? refuse('INVALID_ARGUMENT', "animation_step and animation_from apply to animation:'all' only")
+  : null);
+
 export function createMcp({ sessions, images, log = console }) {
   // The image frame ({mode:'image', path | unavailable | error}), or {refusal}.
   // The image is a file the agent opens with Read; the result carries its path,
@@ -53,6 +60,40 @@ export function createMcp({ sessions, images, log = console }) {
     }
   }
 
+  // The animation of the step in `r.animation` ({step, anim, frame, frame_count}),
+  // for animation:'all': {json, text} parts, {refusal}, or null. Past the
+  // stored page the result is a refusal; with frame:'image' the frames go into
+  // a contact sheet file instead of the json.
+  async function animation(r, a) {
+    if (a.animation !== 'all') return null;
+    const from = a.animation_from ?? 0;
+    const src = r.animation;
+    if (from > 0 && from >= src.frame_count) return { refusal: refuse('INVALID_ARGUMENT', `animation_from ${from} is past the last frame of step ${src.step}`, { frame_count: src.frame_count }) };
+    const text = () => animationText(src, { from });
+    if (a.frame !== 'image') return { json: () => animationData(src, { from }), text };
+    const { meta, frames } = animationView(src, from);
+    let image;
+    if (frames.length === 0) image = { unavailable: 'no_frame' };
+    else {
+      const opts = { scale: Math.min(a.image_scale ?? IMAGE_SPEC.sheet.scale_default, IMAGE_SPEC.sheet.scale_max), grid: a.image_grid ?? IMAGE_SPEC.grid.default };
+      try {
+        const w = await images.writeSheet(r.meta.id, src.step, frames, opts);
+        image = w.ended ? { unavailable: 'session_ended' } : { path: w.path };
+      } catch (e) {
+        log.error(`[code-arc] contact sheet for ${r.meta.id} failed: ${e.stack || e.message}`);
+        image = { error: e.message };
+      }
+    }
+    return {
+      json: () => ({ ...meta, image }),
+      text: () => {
+        const head = `Animation of step ${meta.step}: frame_count ${meta.frame_count}, ${meta.stored} stored, frames ${frames.map((f) => f.index).join(', ') || 'none'}.`;
+        const where = image.path ? `Contact sheet: ${image.path}, open it with Read (tiles numbered by frame index).` : `Contact sheet unavailable (${image.unavailable || image.error}).`;
+        return [head, where, ...animationNotes(meta)].join('\n');
+      },
+    };
+  }
+
   // The text view's frame descriptor and labelled grid for a non-image frame.
   function textFrame(a, r) {
     if (a.frame !== 'none' && !r.obs.frame) return { frame: { mode: a.frame, noFrame: true }, grid: '' };
@@ -68,14 +109,20 @@ export function createMcp({ sessions, images, log = console }) {
       image = await boardImage(r, a);
       if (image.refusal) return image.refusal;
     }
+    const anim = await animation(r, a);
+    if (anim?.refusal) return anim.refusal;
     const { session_id: sessionId, game_id: gameId, ...rest } = withoutOk(observationFields(r));
     const fields = { session_id: sessionId, game_id: gameId, title: r.meta.title, ...rest };
     return {
-      json: () => ({ ...fields, frame: image ? image.frame : frameData(a.frame, r.prev, r.obs.frame) }),
+      json: () => ({ ...fields, frame: image ? image.frame : frameData(a.frame, r.prev, r.obs.frame), ...(anim ? { animation: anim.json() } : {}) }),
       text: () => {
-        if (image) return observationText(fields, image.frame);
-        const { frame, grid } = textFrame(a, r);
-        return observationText(fields, frame, grid);
+        let body;
+        if (image) body = observationText(fields, image.frame);
+        else {
+          const { frame, grid } = textFrame(a, r);
+          body = observationText(fields, frame, grid);
+        }
+        return anim ? `${body}\n${anim.text()}` : body;
       },
     };
   }
@@ -85,9 +132,16 @@ export function createMcp({ sessions, images, log = console }) {
   const handlers = {
     list_games: async () => simple(await sessions.listGames(), gamesText),
     start_session: async (a, caller) => observation(await sessions.start(a, caller), { frame: 'full' }),
-    act: async (a, caller) => misplacedImageOptions(a) || observation(await sessions.act(a, caller), a),
+    act: async (a, caller) => {
+      const bad = misplacedImageOptions(a);
+      if (bad) return bad;
+      const r = await sessions.act(a, caller);
+      // The step just taken: its frames are in the result, no read needed.
+      if (r.ok && a.animation === 'all') r.animation = { step: r.meta.step_count, anim: r.obs.anim, frame: r.obs.frame, frame_count: r.obs.frame_count };
+      return observation(r, a);
+    },
     reset: async (a, caller) => misplacedImageOptions(a) || observation(await sessions.reset(a, caller), a),
-    observe: async (a) => misplacedImageOptions(a) || observation(sessions.observe(a), a),
+    observe: async (a) => misplacedImageOptions(a) || misplacedAnimationOptions(a) || observation(await sessions.observe(a), a),
     end_session: async (a, caller) => simple(await sessions.end(a, caller), endText),
     list_sessions: async (a, caller) => simple(sessions.listSessions(a, caller), (r) => sessionsText(r, a.offset ?? 0)),
     note: async (a, caller) => simple(await sessions.note(a, caller), noteText),

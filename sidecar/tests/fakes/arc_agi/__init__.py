@@ -17,6 +17,8 @@ Games:
   fake-lose   fake-maze, but ACTION3 (left) ends the game in GAME_OVER.
   fake-reset0 fake-maze, but its available_actions also list 0 (RESET).
   fake-evil   fake-maze with a hostile title.
+  fake-anim   fake-maze, but ACTION1 answers 70 frames (a marker walks along row 1
+              of each leading frame; the last is the board), over both frame caps.
   fake-hang   step blocks forever.
   fake-slow   step answers after 0.4 s (a late reply).
   fake-crash  step kills the process (exit 3).
@@ -148,6 +150,7 @@ GAMES = {
     "fake-maze": ("Fake Maze", ["keyboard", "click"]),
     "fake-lose": ("Fake Lose", ["keyboard"]),
     "fake-reset0": ("Fake Reset0", ["keyboard"]),
+    "fake-anim": ("Fake Anim", ["keyboard"]),
     "fake-evil": ("Evil <img src=x onerror=alert(1)>", ["click"]),
     "fake-hang": ("Fake Hang", []),
     "fake-slow": ("Fake Slow", []),
@@ -298,6 +301,13 @@ class _Wrapper:
                     g.state = GameState.WIN
             if gid == "fake-lose" and action.value == 3 and g.state == GameState.NOT_FINISHED:
                 g.state = GameState.GAME_OVER
+            if gid == "fake-anim" and action.value == 1:
+                lead = []
+                for k in range(69):
+                    f = g.grid()
+                    f[1][1 + k % 62] = PAINT
+                    lead.append(f)
+                return self._obs(lead + [g.grid()], action_input=ai)
             return self._obs([mid, g.grid()], action_input=ai)
         if action == GameAction.ACTION6:
             g.paint[(int(data["x"]), int(data["y"]))] = PAINT

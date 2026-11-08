@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 from typing import Any, Optional
 
@@ -20,6 +21,9 @@ ACTIONS = ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6", "AC
 GAME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 HEX = "0123456789abcdef"
 FRAME_MAX = 64
+# Frames kept per step: the first ANIMATION_FRAMES_MAX - 1 and the last. Mirrors
+# src/limits.js (tests/manifest.test.mjs pins them equal).
+ANIMATION_FRAMES_MAX = 64
 TITLE_MAX = 200
 TAGS_MAX = 20
 TAG_MAX = 40
@@ -194,25 +198,44 @@ def _cap(s: Any, n: int) -> str:
     return str(s if s is not None else "")[:n]
 
 
+def _hex_rows(frame: Any) -> list:
+    """One toolkit frame (numpy array or nested lists) as hex rows; raises
+    Refusal when it is not a rectangular grid of palette values."""
+    grid = frame.tolist() if hasattr(frame, "tolist") else frame
+    if not isinstance(grid, list) or not (1 <= len(grid) <= FRAME_MAX):
+        raise Refusal("TOOLKIT_ERROR", "frame has an unexpected shape")
+    width = len(grid[0]) if isinstance(grid[0], list) else 0
+    if not (1 <= width <= FRAME_MAX):
+        raise Refusal("TOOLKIT_ERROR", "frame has an unexpected shape")
+    rows = []
+    for row in grid:
+        if not isinstance(row, list) or len(row) != width:
+            raise Refusal("TOOLKIT_ERROR", "frame is not rectangular")
+        for v in row:
+            if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 15:
+                raise Refusal("TOOLKIT_ERROR", "frame value outside the palette")
+        rows.append("".join(HEX[v] for v in row))
+    return rows
+
+
+def _leading_frames(frames: list) -> list:
+    """The animation's frames before the last, oldest first, at most
+    ANIMATION_FRAMES_MAX - 1 (the first ones). An invalid leading frame drops
+    the whole list with a warning: the action is already applied, so refusing
+    here would desync the recorded history."""
+    lead = frames[:-1] if len(frames) <= ANIMATION_FRAMES_MAX else frames[: ANIMATION_FRAMES_MAX - 1]
+    try:
+        return [_hex_rows(f) for f in lead]
+    except Refusal as e:
+        sys.stderr.write(f"[code-arc] dropping the animation frames of this step: {e.detail}\n")
+        sys.stderr.flush()
+        return []
+
+
 def normalize_obs(obs: Any) -> dict:
     frames = list(getattr(obs, "frame", None) or [])
-    rows = None
-    if frames:
-        last = frames[-1]
-        grid = last.tolist() if hasattr(last, "tolist") else last
-        if not isinstance(grid, list) or not (1 <= len(grid) <= FRAME_MAX):
-            raise Refusal("TOOLKIT_ERROR", "frame has an unexpected shape")
-        width = len(grid[0]) if isinstance(grid[0], list) else 0
-        if not (1 <= width <= FRAME_MAX):
-            raise Refusal("TOOLKIT_ERROR", "frame has an unexpected shape")
-        rows = []
-        for row in grid:
-            if not isinstance(row, list) or len(row) != width:
-                raise Refusal("TOOLKIT_ERROR", "frame is not rectangular")
-            for v in row:
-                if not isinstance(v, int) or isinstance(v, bool) or not 0 <= v <= 15:
-                    raise Refusal("TOOLKIT_ERROR", "frame value outside the palette")
-            rows.append("".join(HEX[v] for v in row))
+    rows = _hex_rows(frames[-1]) if frames else None
+    anim = _leading_frames(frames) if len(frames) > 1 else []
     state = getattr(obs, "state", None)
     state = getattr(state, "value", state)
     return {
@@ -223,6 +246,7 @@ def normalize_obs(obs: Any) -> dict:
         "full_reset": bool(getattr(obs, "full_reset", False)),
         "frame_count": len(frames),
         "frame": rows,
+        "anim": anim,
     }
 
 

@@ -15,6 +15,10 @@
 //   script-burst.png   after a live 300-step script burst, caught up with Jump to latest
 //   paced-behind.png   mid-burst in Live: the shown step lags, "N steps behind" and Jump to latest
 //   replay.png         Replay playing through the maze session
+//   anim-frame.png     a two-frame step: animation controls, Previous frame shows the shadow frame
+//   anim-play.png      Play animation ended on the last frame (Replay animation offered)
+//   anim-single.png    the START step: no animation controls
+//   anim-gap.png       a 70-frame step: only 64 stored, the not-stored note
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
@@ -254,6 +258,48 @@ try {
   }, { viewport: { width: 1280, height: 900 } });
 } finally {
   await fast.close();
+}
+
+const animSrv = await bootArc();
+try {
+  const maze = sessionId(await mcp(animSrv.url, 'start_session', { game_id: 'fake-maze' }));
+  await mcp(animSrv.url, 'act', { session_id: maze, action: 'ACTION4', reasoning: 'One move right: two frames.' });
+  const long = sessionId(await mcp(animSrv.url, 'start_session', { game_id: 'fake-anim' }));
+  await mcp(animSrv.url, 'act', { session_id: long, action: 'ACTION1', reasoning: 'A 70-frame animation.' });
+  await withPage(async (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    page.on('response', (r) => { if (r.status() >= 400 && !/pluginBridge|pluginTheme/.test(r.url())) problems.push(`${r.status()} ${new URL(r.url()).pathname}`); });
+    const label = () => page.locator('#anim-label').textContent();
+    const canvas = () => page.evaluate(() => document.getElementById('grid').toDataURL());
+    await page.goto(animSrv.url);
+    await page.getByRole('button', { name: /Fake Maze/ }).click();
+    await page.locator('#steplog li').nth(1).waitFor();
+    await page.locator('#scrub-label', { hasText: 'step 1 of 1' }).waitFor();
+    await page.locator('#anim:not([hidden])').waitFor();
+    if ((await label()) !== 'frame 1 of 2') problems.push(`anim label before use: ${await label()}`);
+    const lastFrame = await canvas();
+    await page.getByRole('button', { name: 'Previous animation frame' }).click();
+    await page.locator('#anim-label', { hasText: 'frame 0 of 2' }).waitFor();
+    if ((await canvas()) === lastFrame) problems.push('Previous animation frame did not change the canvas');
+    if ((await page.locator('#mode-replay').getAttribute('aria-pressed')) !== 'true') problems.push('animation control did not land in Replay');
+    await shot(page, 'anim-frame.png');
+    await page.getByRole('button', { name: 'Play animation' }).click();
+    await page.locator('#anim-label', { hasText: 'frame 1 of 2' }).waitFor();
+    await page.getByRole('button', { name: 'Replay animation' }).waitFor();
+    if ((await canvas()) !== lastFrame) problems.push('animation did not end on the last frame');
+    await shot(page, 'anim-play.png');
+    await page.locator('#steplog button').first().click();
+    await page.locator('#scrub-label', { hasText: 'step 0 of 1' }).waitFor();
+    if (!(await page.locator('#anim').isHidden())) problems.push('animation controls shown on a single-frame step');
+    await shot(page, 'anim-single.png');
+    await page.getByRole('button', { name: /Fake Anim/ }).click();
+    await page.locator('#anim:not([hidden])').waitFor();
+    await page.getByRole('button', { name: 'Previous animation frame' }).click();
+    await page.locator('#anim-note', { hasText: 'frames 63-68 not stored' }).waitFor();
+    await shot(page, 'anim-gap.png');
+  }, { viewport: { width: 1280, height: 900 } });
+} finally {
+  await animSrv.close();
 }
 
 const diverged = await bootDiverged();
