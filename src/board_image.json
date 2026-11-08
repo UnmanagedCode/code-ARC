@@ -2,7 +2,7 @@
   "palette": ["#FFFFFF", "#CCCCCC", "#999999", "#666666", "#333333", "#000000", "#E53AA3", "#FF7BCC",
               "#F93C31", "#1E93FF", "#88D8F1", "#FFDC00", "#FF851B", "#921231", "#4FCC30", "#A356D6"],
   "scale": { "min": 4, "max": 16, "default": 8 },
-  "sheet": { "columns": 4, "gap": 8, "scale_default": 4 },
+  "sheet": { "columns": 4, "gap": 8, "scale_default": 4, "scale_max": 8 },
   "grid": {
     "default": true,
     "every": 8,

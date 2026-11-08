@@ -166,3 +166,17 @@ test('observe with an animation is not a step: no rate slot, no step count chang
   ok(await mcp('act', { session_id: sid, action: 'ACTION4' }));
   refusal(await mcp('act', { session_id: sid, action: 'ACTION4' }), 'STEP_RATE_LIMITED');
 });
+
+test('a contact sheet clamps image_scale to sheet.scale_max; board images keep the full range', async (t) => {
+  const { mcp } = await startApp(t, FAST);
+  const sid = await startGame(mcp);
+  const sheetAt = async (scale) => {
+    const r = ok(await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image', image_scale: scale, animation: 'all' }));
+    return { sheet: decodePng(await fs.readFile(r.animation.image.path)), board: decodePng(await fs.readFile(r.frame.path)) };
+  };
+  const max = await sheetAt(IMAGE_SPEC.sheet.scale_max);
+  const over = await sheetAt(IMAGE_SPEC.scale.max);
+  assert.ok(IMAGE_SPEC.scale.max > IMAGE_SPEC.sheet.scale_max);
+  assert.deepEqual([over.sheet.width, over.sheet.height], [max.sheet.width, max.sheet.height]);
+  assert.ok(over.board.width > max.board.width, 'the board image is not clamped');
+});

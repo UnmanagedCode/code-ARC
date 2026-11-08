@@ -109,7 +109,9 @@ async function lastLine(file) {
     };
     const first = await tail(TAIL_READ_BYTES);
     if (first.whole) return first.line;
-    return (await tail(Math.min(size, STEP_LINE_MAX_BYTES))).line;
+    // Still no whole line: report none rather than a fragment.
+    const wide = await tail(Math.min(size, STEP_LINE_MAX_BYTES));
+    return wide.whole ? wide.line : null;
   } finally {
     await fh.close();
   }
@@ -273,10 +275,14 @@ export function createStore({ dataDir, log = console }) {
     async readStep(id, n) {
       const file = path.join(dirOf(id), 'steps.jsonl');
       const lastLn = await lastLine(file);
-      if (lastLn === null) return null;
-      const m = STEP_N.exec(lastLn);
+      const m = lastLn === null ? null : STEP_N.exec(lastLn);
       if (m && Number(m[1]) === n) {
         try { return decodeStep(lastLn, { anim: true }); } catch { /* fall through to the scan */ }
+      }
+      try {
+        await fs.access(file);
+      } catch {
+        return null;
       }
       const stream = createReadStream(file, { encoding: 'utf8' });
       const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });

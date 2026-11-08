@@ -36,7 +36,8 @@ function compile(spec) {
   if (typeof g.default !== 'boolean') fail('grid.default must be a boolean');
   int(sheet?.columns, 1, 'sheet.columns');
   int(sheet.gap, 0, 'sheet.gap');
-  if (int(sheet.scale_default, scale.min, 'sheet.scale_default') > scale.max) fail('sheet.scale_default must be <= scale.max');
+  int(sheet.scale_default, scale.min, 'sheet.scale_default');
+  if (int(sheet.scale_max, sheet.scale_default, 'sheet.scale_max') > scale.max) fail('sheet.scale_max must be <= scale.max');
   const glyphs = {};
   let glyphWidth = null;
   for (const d of DIGITS) {

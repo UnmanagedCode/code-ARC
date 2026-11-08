@@ -9,7 +9,7 @@ import { frameData, frameText } from './frames.js';
 
 // {frames:[{index, rows}], stored, omitted}; no frame (a terminal step) gives none.
 export function stepFrames({ anim, frame, frame_count: count }) {
-  if (!frame) return { frames: [], stored: 0, omitted: 0 };
+  if (!frame) return { frames: [], stored: 0, omitted: Math.max(0, count) };
   const lead = Array.isArray(anim) ? anim : [];
   const frames = [...lead.map((rows, index) => ({ index, rows })), { index: Math.max(count - 1, lead.length), rows: frame }];
   return { frames, stored: frames.length, omitted: Math.max(0, count - frames.length) };

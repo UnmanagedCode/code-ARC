@@ -32,9 +32,16 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
 
   // Fetches the shown step's frames once; resolves true when `data` is usable
   // for the step that was shown when it was asked.
-  async function ensure() {
-    if (data) return true;
-    if (!step) return false;
+  const inflight = new Map();
+  function ensure() {
+    if (data) return Promise.resolve(true);
+    if (!step) return Promise.resolve(false);
+    const key = `${token}:${step.n}`;
+    if (!inflight.has(key)) inflight.set(key, load().finally(() => inflight.delete(key)));
+    return inflight.get(key);
+  }
+
+  async function load() {
     const mine = token;
     const n = step.n;
     status = 'loading';
@@ -108,7 +115,7 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
 
     // The step now shown. The same step keeps its state; a new one starts on its last frame.
     show(next) {
-      if (next && step && next.n === step.n) return;
+      if (next ? step && next.n === step.n : !step) return;
       token++;
       cancel();
       step = next ? { n: next.n, frame_count: next.frame_count } : null;
@@ -149,6 +156,5 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
       onChange();
     },
 
-    dispose() { cancel(); token++; },
   };
 }

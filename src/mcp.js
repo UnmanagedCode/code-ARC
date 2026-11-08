@@ -75,7 +75,7 @@ export function createMcp({ sessions, images, log = console }) {
     let image;
     if (frames.length === 0) image = { unavailable: 'no_frame' };
     else {
-      const opts = { scale: a.image_scale ?? IMAGE_SPEC.sheet.scale_default, grid: a.image_grid ?? IMAGE_SPEC.grid.default };
+      const opts = { scale: Math.min(a.image_scale ?? IMAGE_SPEC.sheet.scale_default, IMAGE_SPEC.sheet.scale_max), grid: a.image_grid ?? IMAGE_SPEC.grid.default };
       try {
         const w = await images.writeSheet(r.meta.id, src.step, frames, opts);
         image = w.ended ? { unavailable: 'session_ended' } : { path: w.path };

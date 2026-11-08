@@ -292,3 +292,16 @@ test('frames inside anim_z are separated by a blank line, so rows and frames nev
   await store.flush();
   assert.deepEqual((await store.readStep(SID, 0)).anim, [['11', '22'], ['33']]);
 });
+
+test('a last line over the wide window reads as no line: init decodes no fragment and logs it malformed', async (t) => {
+  const env = await freshEnv(t);
+  const dir = path.join(env.dataDir, 'sessions', SID);
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: 1 }));
+  const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
+  const huge = JSON.stringify({ n: 1, action: 'B', frame: gridRows(2), pad: 'x'.repeat(700 * 1024) });
+  await fs.writeFile(path.join(dir, 'steps.jsonl'), `${ok0}\n${huge}\n`);
+  const { store } = await storeAt(t, env);
+  assert.equal(store.lastFrame(SID), null);
+  assert.equal(await store.readStep(SID, 0).then((s) => s.n), 0, 'earlier lines still read by the scan');
+});

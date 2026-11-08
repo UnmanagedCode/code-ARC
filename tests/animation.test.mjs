@@ -99,3 +99,7 @@ test('text: full frame first, diffs after, labelled with the toolkit frame index
   assert.match(t, /frame 0 \(full\):/);
   assert.match(t, /frame 1 \(diff, 1 cells changed\):/);
 });
+
+test('omitted follows frame_count - stored even when the last frame is missing', () => {
+  assert.deepEqual(stepFrames({ anim: [], frame: null, frame_count: 3 }), { frames: [], stored: 0, omitted: 3 });
+});

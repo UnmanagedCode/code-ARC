@@ -145,3 +145,29 @@ test('showing the same step again keeps its state; reset clears the cache', asyn
   anim.show({ n: 1, frame_count: 3 });
   assert.equal(anim.status, 'idle');
 });
+
+test('onChange fires at most once for repeated show(null) and repeated show of the same step', () => {
+  const { anim, changes } = setup();
+  anim.show(null);
+  anim.show(null);
+  assert.equal(changes(), 0, 'nothing shown, nothing changed');
+  anim.show({ n: 1, frame_count: 3 });
+  const after = changes();
+  assert.equal(after, 1);
+  anim.show({ n: 1, frame_count: 3 });
+  assert.equal(changes(), after);
+  anim.show(null);
+  anim.show(null);
+  assert.equal(changes(), after + 1, 'going to no step is one change');
+});
+
+test('two quick play() calls on one step fetch its frames once', async () => {
+  let release;
+  const { anim, fetched } = setup(() => new Promise((r) => { release = r; }));
+  anim.show({ n: 1, frame_count: 3 });
+  const a = anim.play();
+  const b = anim.play();
+  release(data([0, 1, 2]));
+  await Promise.all([a, b]);
+  assert.deepEqual(fetched, [1]);
+});
