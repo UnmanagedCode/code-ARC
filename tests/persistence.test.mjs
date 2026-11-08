@@ -293,19 +293,33 @@ test('frames inside anim_z are separated by a blank line, so rows and frames nev
   assert.deepEqual((await store.readStep(SID, 0)).anim, [['11', '22'], ['33']]);
 });
 
-test('a last line longer than every tail window: init scans for it, restores lastFrame, and readStep serves it', async (t) => {
+async function sessionWith(t, lines) {
   const env = await freshEnv(t);
   const dir = path.join(env.dataDir, 'sessions', SID);
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: 1 }));
+  await fs.writeFile(path.join(dir, 'meta.json'), JSON.stringify({ id: SID, status: 'ended', created_at: 'x', step_count: lines.length - 1 }));
+  await fs.writeFile(path.join(dir, 'steps.jsonl'), lines.map((l) => `${l}\n`).join(''));
+  const logged = [];
+  const store = createStore({ dataDir: env.dataDir, log: { error: (m) => logged.push(m) } });
+  await store.init();
+  return { store, logged };
+}
+
+test('a newest line longer than every tail window: init logs it unreadable and restores no frame; readStep still serves the earlier step', async (t) => {
   const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
   const huge = JSON.stringify({ n: 1, action: 'B', frame: gridRows(2), pad: 'x'.repeat(700 * 1024) });
-  await fs.writeFile(path.join(dir, 'steps.jsonl'), `${ok0}\n${huge}\n`);
-  const lines = [];
-  const store = createStore({ dataDir: env.dataDir, log: { error: (m) => lines.push(m) } });
-  await store.init();
-  assert.deepEqual(store.lastFrame(SID), gridRows(2), 'the newest step\'s frame, not the earlier one and not a fragment');
-  assert.deepEqual(lines, [], 'nothing malformed was logged');
-  assert.deepEqual((await store.readStep(SID, 1)).frame, gridRows(2));
+  const { store, logged } = await sessionWith(t, [ok0, huge]);
+  assert.equal(store.lastFrame(SID), null, 'neither a fragment nor the older step\'s frame');
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable`));
   assert.deepEqual((await store.readStep(SID, 0)).frame, gridRows(1));
+});
+
+test('an oversized corrupt newest line after valid steps never surfaces the previous step\'s frame', async (t) => {
+  const steps = [0, 1, 2].map((n) => JSON.stringify({ n, action: 'A', frame: gridRows(n) }));
+  const corrupt = `{"n":3,"action":"B","pad":"${'x'.repeat(700 * 1024)}`; // torn: no closing
+  const { store, logged } = await sessionWith(t, [...steps, corrupt]);
+  assert.equal(store.lastFrame(SID), null);
+  assert.equal(logged.length, 1);
+  assert.deepEqual((await store.readStep(SID, 2)).frame, gridRows(2), 'earlier steps stay readable by step number');
 });

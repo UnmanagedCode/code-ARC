@@ -100,9 +100,9 @@ test('text: full frame first, diffs after, labelled with the toolkit frame index
   assert.match(t, /frame 1 \(diff, 1 cells changed\):/);
 });
 
-test('text: a step with no stored frame says none were recorded, with no bogus range', () => {
+test('text: a step with no readable frame says so, with no bogus range', () => {
   const t = animationText({ step: 5, anim: undefined, frame: null, frame_count: 3 });
-  assert.match(t, /No frames were recorded for this step \(frame_count 3\)/);
+  assert.match(t, /No readable frames were recorded for this step \(frame_count 3\)/);
   assert.doesNotMatch(t, /-1|were not stored/);
 });
 

@@ -87,7 +87,7 @@ export async function ensureDir(dir) {
 }
 
 // The file's last line: null when the file is missing or empty, undefined when
-// it has content but no whole last line fits the tail windows (the caller scans).
+// it has content but no whole last line fits the tail windows.
 async function lastLine(file) {
   let fh;
   try {
@@ -116,24 +116,6 @@ async function lastLine(file) {
   } finally {
     await fh.close();
   }
-}
-
-// The last line of a step file that decodes, by reading the whole file: the
-// fallback for a last line longer than every tail window. Never a fragment.
-async function scanLastStep(file) {
-  const stream = createReadStream(file, { encoding: 'utf8' });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  let last = null;
-  try {
-    for await (const line of rl) {
-      if (!line) continue;
-      try { last = decodeStep(line); } catch { /* a torn line */ }
-    }
-  } finally {
-    rl.close();
-    stream.destroy();
-  }
-  return last;
 }
 
 export function createStore({ dataDir, log = console }) {
@@ -181,13 +163,16 @@ export function createStore({ dataDir, log = console }) {
         metas.set(id, meta);
         const file = path.join(dirOf(id), 'steps.jsonl');
         const line = await lastLine(file);
-        let step = null;
-        try {
-          step = line === undefined ? await scanLastStep(file) : line ? decodeStep(line) : null;
-        } catch {
-          log.error(`[code-arc] session ${id}: last step line is malformed`);
+        if (line === undefined) {
+          log.error(`[code-arc] session ${id}: the newest step line is unreadable (oversized or torn); no last frame restored`);
+        } else if (line) {
+          try {
+            const step = decodeStep(line);
+            if (Array.isArray(step.frame)) lastFrames.set(id, step.frame);
+          } catch (e) {
+            log.error(`[code-arc] session ${id}: the newest step line is unreadable: ${e.message}`);
+          }
         }
-        if (step && Array.isArray(step.frame)) lastFrames.set(id, step.frame);
       }
     },
 
@@ -294,7 +279,7 @@ export function createStore({ dataDir, log = console }) {
     async readStep(id, n) {
       const file = path.join(dirOf(id), 'steps.jsonl');
       const lastLn = await lastLine(file);
-      const m = lastLn === null ? null : STEP_N.exec(lastLn);
+      const m = typeof lastLn === 'string' ? STEP_N.exec(lastLn) : null;
       if (m && Number(m[1]) === n) {
         try { return decodeStep(lastLn, { anim: true }); } catch { /* fall through to the scan */ }
       }
