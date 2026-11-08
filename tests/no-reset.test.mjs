@@ -1,5 +1,5 @@
-// allow_reset:false sessions (docs/protocol.md → RESET_DISABLED): one run, no
-// resets, from the tools.
+// One-run sessions (the default; docs/protocol.md → RESET_DISABLED): no resets
+// from the tools unless the session was started with allow_reset:true.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
@@ -17,21 +17,37 @@ async function win(mcp, sid) {
   return last;
 }
 
-test('default sessions are unchanged: no allow_reset key anywhere; reset after GAME_OVER continues', async (t) => {
-  const { mcp, env } = await startApp(t, FAST);
+const stored = async (env, sid) => JSON.parse(await fs.readFile(path.join(env.dataDir, 'sessions', sid, 'meta.json'), 'utf8'));
+
+test('an omitted allow_reset is one run: stored and surfaced as false; reset refused RESET_DISABLED', async (t) => {
+  const { mcp, env, url } = await startApp(t, FAST);
   const start = ok(await mcp('start_session', { game_id: 'fake-lose' }));
   const sid = start.session_id;
-  assert.equal('allow_reset' in start, false);
+  assert.equal(start.allow_reset, false);
+  assert.equal((await stored(env, sid)).allow_reset, false);
+  assert.equal(ok(await mcp('list_sessions')).sessions.find((s) => s.session_id === sid).allow_reset, false);
+  assert.equal((await json(`${url}/api/sessions/${sid}`)).body.allow_reset, false);
+  const r = refusal(await mcp('reset', { session_id: sid }), 'RESET_DISABLED');
+  assert.equal(r.details.allow_reset, false);
+  const over = ok(await mcp('act', { session_id: sid, action: 'ACTION3' }));
+  assert.equal(over.state, 'GAME_OVER');
+  assert.deepEqual(over.available_actions, []);
+});
+
+test('allow_reset:true allows resets: surfaced as true; reset after GAME_OVER continues', async (t) => {
+  const { mcp, env, url } = await startApp(t, FAST);
+  const start = ok(await mcp('start_session', { game_id: 'fake-lose', allow_reset: true }));
+  const sid = start.session_id;
+  assert.equal(start.allow_reset, true);
   assert.ok(start.available_actions.length > 0);
   const over = ok(await mcp('act', { session_id: sid, action: 'ACTION3' }));
   assert.equal(over.state, 'GAME_OVER');
   const refused = refusal(await mcp('act', { session_id: sid, action: 'ACTION1' }), 'GAME_FINISHED');
   assert.equal('allow_reset' in refused.details, false);
   assert.equal(ok(await mcp('reset', { session_id: sid })).state, 'NOT_FINISHED');
-  const stored = JSON.parse(await fs.readFile(path.join(env.dataDir, 'sessions', sid, 'meta.json'), 'utf8'));
-  assert.equal('allow_reset' in stored, false);
-  const listed = ok(await mcp('list_sessions')).sessions.find((s) => s.session_id === sid);
-  assert.equal('allow_reset' in listed, false);
+  assert.equal((await stored(env, sid)).allow_reset, true);
+  assert.equal(ok(await mcp('list_sessions')).sessions.find((s) => s.session_id === sid).allow_reset, true);
+  assert.equal((await json(`${url}/api/sessions/${sid}`)).body.allow_reset, true);
 });
 
 test('allow_reset:false refuses every reset (start, level, after a win) without reaching the toolkit or recording a step', async (t) => {
@@ -104,15 +120,18 @@ test('allow_reset must be a boolean', async (t) => {
   assert.equal((await app.sessions.start({ game_id: 'fake-maze', allow_reset: 'no' }, { sessionId: 'agent-a' })).code, 'INVALID_ARGUMENT');
 });
 
-test('list_sessions and api/sessions surface allow_reset:false', async (t) => {
+test('list_sessions and api/sessions surface allow_reset either way', async (t) => {
   const { mcp, url } = await startApp(t);
   const sid = await startGame(mcp, 'fake-maze', { allow_reset: false });
-  const listed = ok(await mcp('list_sessions')).sessions.find((s) => s.session_id === sid);
-  assert.equal(listed.allow_reset, false);
+  const sidOn = await startGame(mcp, 'fake-maze', { allow_reset: true });
+  const sessions = ok(await mcp('list_sessions')).sessions;
+  assert.equal(sessions.find((s) => s.session_id === sid).allow_reset, false);
+  assert.equal(sessions.find((s) => s.session_id === sidOn).allow_reset, true);
   assert.equal((await json(`${url}/api/sessions/${sid}`)).body.allow_reset, false);
+  assert.equal((await json(`${url}/api/sessions/${sidOn}`)).body.allow_reset, true);
 });
 
-test('a one-run session never lists RESET while unfinished, even when the toolkit reports it; a default session still does', async (t) => {
+test('a one-run session never lists RESET while unfinished, even when the toolkit reports it; a resettable session still does', async (t) => {
   const { mcp } = await startApp(t, FAST);
   const oneRun = ok(await mcp('start_session', { game_id: 'fake-reset0', allow_reset: false }));
   assert.equal(oneRun.state, 'NOT_FINISHED');
@@ -120,7 +139,7 @@ test('a one-run session never lists RESET while unfinished, even when the toolki
   const refused = refusal(await mcp('act', { session_id: oneRun.session_id, action: 'ACTION5' }), 'ACTION_UNAVAILABLE');
   assert.deepEqual(refused.details.available_actions, ['ACTION1', 'ACTION2', 'ACTION3', 'ACTION4', 'ACTION6']);
 
-  const normal = ok(await mcp('start_session', { game_id: 'fake-reset0' }));
+  const normal = ok(await mcp('start_session', { game_id: 'fake-reset0', allow_reset: true }));
   assert.ok(normal.available_actions.includes('RESET'));
   const normalRefused = refusal(await mcp('act', { session_id: normal.session_id, action: 'ACTION5' }), 'ACTION_UNAVAILABLE');
   assert.ok(normalRefused.details.available_actions.includes('RESET'));

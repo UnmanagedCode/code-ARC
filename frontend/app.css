@@ -122,7 +122,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
   border: 1px solid var(--border); background: var(--muted);
 }
 .badge.mode-online { border-color: var(--primary); }
-.badge.no-reset { border-color: var(--warning); }
+.badge.resets { border-color: var(--warning); }
 .badge.status-live { border-color: var(--success); }
 .badge.status-stalled, .badge.status-warn { border-color: var(--warning); }
 .badge.status-ended { color: var(--muted-foreground); }

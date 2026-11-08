@@ -1,6 +1,6 @@
 // The observation fields every observation-returning tool shares, for a session
 // service result {meta, obs, online}; src/mcp.js adds the title and the frame.
-import { actionName, visibleActions } from './sessions.js';
+import { actionName, resetAllowed, visibleActions } from './sessions.js';
 
 export function observationFields({ meta: s, obs, online }) {
   const out = {
@@ -8,7 +8,7 @@ export function observationFields({ meta: s, obs, online }) {
     session_id: s.id,
     game_id: s.game_id,
     mode: s.mode,
-    ...(s.allow_reset === false ? { allow_reset: false } : {}),
+    allow_reset: resetAllowed(s),
     status: s.status,
     state: obs.state,
     levels_completed: obs.levels_completed,

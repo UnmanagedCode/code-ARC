@@ -26,7 +26,7 @@ description: How to play ARC-AGI-3 games well with the Code ARC tools (code-arc_
   return seen;
   ```
 - `frame_count` above 1 means the action animated; you see only the last frame.
-- In `WIN` or `GAME_OVER`, only `reset` or `end_session` work. `reset` restarts the current level (the whole game after a win). A session started with `allow_reset: false` (use it only when the user asks for one run) refuses every reset (`RESET_DISABLED`): `GAME_OVER` ends the run, so `end_session`.
+- In `WIN` or `GAME_OVER`, only `reset` or `end_session` work. Sessions are one run unless started with `allow_reset: true` (only when the user allows retries): `reset` is refused (`RESET_DISABLED`), so `GAME_OVER` ends the run; `end_session`.
 - Always `end_session` when you are done: it closes the scorecard.
 - Use `online: true` only when the user asks for an arcprize.org scorecard: every online step is a network round trip and counts against a rate limit.
 - On a refusal (an error with a `code`), read `code`; the message says why, and extra fields are in `details`:

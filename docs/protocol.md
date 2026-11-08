@@ -21,12 +21,12 @@ The tables below give each tool's json `structured` fields; the text view of eac
 | Tool | Arguments | `structured` (json view) |
 |---|---|---|
 | `list_games` | — | `{games:[{game_id, title, tags, downloaded, source}], web_unavailable?}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; `web_unavailable: {code, detail}` is present when, with a bundle, the web game list failed or is still loading (the text view says only the bundle's games are listed); a failed game-list fetch without a bundle is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
-| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation (first frame full) |
+| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `false` = one run: every `reset` is refused `RESET_DISABLED`; `true` allows resets) | observation (first frame full) |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid` | observation from the stored last step; no toolkit call |
 | `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
-| `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry carries `allow_reset:false` when set. json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
+| `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry always carries `allow_reset` (boolean). json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
 | `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
 
 Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `note` → a line naming the run opened.
@@ -38,13 +38,13 @@ Text view per tool: `list_games` → a line per game; observations → the obser
 
 ### Observation result
 
-json: `structured` is the object below. text: the same data as prose: a header line (`Session <id>: <game_id> "<title>" (<mode>, <status>)`), `state … · levels_completed a/b · step n`, `available_actions: …`, conditional lines (`allow_reset: false`, `full_reset`, `status ended (end_reason …)`, `online: scorecard_url … · idle_close_at …`), `frame_count n`, a frame line, then the labelled grid ([Frame text](#frame-text)). With `frame:"image"` the text gives `Board image: <path>, open it with Read.` (or why there is none) and the image is a file: a result never carries image bytes.
+json: `structured` is the object below. text: the same data as prose: a header line (`Session <id>: <game_id> "<title>" (<mode>, <status>)`), `state … · levels_completed a/b · step n`, `available_actions: …`, an `allow_reset: true|false` line (always), conditional lines (`full_reset`, `status ended (end_reason …)`, `online: scorecard_url … · idle_close_at …`), `frame_count n`, a frame line, then the labelled grid ([Frame text](#frame-text)). With `frame:"image"` the text gives `Board image: <path>, open it with Read.` (or why there is none) and the image is a file: a result never carries image bytes.
 
 | `structured` field | Meaning |
 |---|---|
 | `session_id`, `game_id`, `title` | `game_id` is the toolkit's resolved, versioned id |
 | `mode` | `local` or `online` |
-| `allow_reset` | present, `false`, only on sessions started with `allow_reset:false` |
+| `allow_reset` | boolean, always present; `false` = one run (every `reset` refused) |
 | `status` | `live` or `ended` (`end_reason` present when ended) |
 | `state` | `NOT_PLAYED`, `NOT_FINISHED`, `WIN`, `GAME_OVER` |
 | `levels_completed`, `win_levels` | progress |
@@ -146,7 +146,9 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 ### Session meta
 
-`{id, game_id, title, mode, allow_reset?, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
+`{id, game_id, title, mode, allow_reset, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
+
+- `allow_reset` is missing on legacy metas: read it as `true` (`api/sessions` and SSE serve the raw meta; tool outputs always carry the resolved boolean).
 
 ### Step
 
