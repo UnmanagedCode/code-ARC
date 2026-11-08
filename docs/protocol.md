@@ -148,11 +148,12 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 `{id, game_id, title, mode, allow_reset, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
 
+- `allow_reset` is missing on legacy metas: read it as `true` (`api/sessions` and SSE serve the raw meta; tool outputs always carry the resolved boolean).
+
 ### Step
 
 `{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
 
-- `allow_reset` is missing on legacy metas: read it as `true` (`api/sessions` and SSE serve the raw meta; tool outputs always carry the resolved boolean).
 - `source` is missing on steps recorded before scripting existed: read it as `tool`. `source:"script"` = a json-format call; `run` is set only on a script step taken after a note (a script step before the first note has none).
 - On disk a step line carries `frame_z` (base64 raw deflate of the rows joined by `\n`) instead of `frame`; every API and SSE step has `frame` rows. Lines with a plain `frame` still read. A corrupt or tampered stored frame reads as `frame: null` ([architecture.md](architecture.md) → On-disk state).
 
