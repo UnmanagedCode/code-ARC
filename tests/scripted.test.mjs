@@ -1,6 +1,6 @@
 // Scripted play: a json-format call is a program (cc's run_code), so its steps
 // are recorded as scripted; the note tool opens the runs they record. Source
-// attribution, runs, gating, limits, pruning and the retired script HTTP API.
+// attribution, runs, gating, limits, pruning, and that the `api/play` routes are not served.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { freshEnv, json, ok, refusal, sendJsonReq, sseCollect, startApp, until } from './_helpers.mjs';

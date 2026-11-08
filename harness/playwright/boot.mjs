@@ -18,7 +18,7 @@ export function bootArc({ entry = 'server.js' } = {}) {
   });
 }
 
-// Calls a tool the way cc does: POST api/mcp with the caller identity. The
+// Calls a tool the way cc does: POST api/mcp with the caller identity.
 // The default 'text' format is an agent's own tool call (a tool step); 'json'
 // is what a run_code program gets (recorded as a script step).
 export async function mcp(url, tool, args = {}, caller = { sessionId: 'demo-session', project: 'demo' }, format = 'text') {
