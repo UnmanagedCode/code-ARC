@@ -311,7 +311,7 @@ test('a newest line longer than every tail window: init logs it unreadable and r
   const { store, logged } = await sessionWith(t, [ok0, huge]);
   assert.equal(store.lastFrame(SID), null, 'neither a fragment nor the older step\'s frame');
   assert.equal(logged.length, 1);
-  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable`));
+  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable \\(oversized or torn\\)`));
   assert.deepEqual((await store.readStep(SID, 0)).frame, gridRows(1));
 });
 
@@ -321,5 +321,15 @@ test('an oversized corrupt newest line after valid steps never surfaces the prev
   const { store, logged } = await sessionWith(t, [...steps, corrupt]);
   assert.equal(store.lastFrame(SID), null);
   assert.equal(logged.length, 1);
+  assert.match(logged[0], /unreadable \(oversized or torn\)/);
   assert.deepEqual((await store.readStep(SID, 2)).frame, gridRows(2), 'earlier steps stay readable by step number');
+});
+
+test('a short malformed newest line: init logs the decode error (not the oversized/torn wording) and restores no frame', async (t) => {
+  const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
+  const { store, logged } = await sessionWith(t, [ok0, '{"n":1,"action":"B","frame":']);
+  assert.equal(store.lastFrame(SID), null);
+  assert.equal(logged.length, 1);
+  assert.match(logged[0], new RegExp(`${SID}: the newest step line is unreadable: .+`));
+  assert.doesNotMatch(logged[0], /oversized or torn/);
 });
