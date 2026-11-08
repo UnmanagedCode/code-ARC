@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ROOT } from './_helpers.mjs';
 import { IMAGE_SPEC } from '../src/boardImage.js';
 import { createMcp } from '../src/mcp.js';
+import { checkSchema } from './_jsonSchemaSubset.mjs';
 import { ACTIONS, COORD_MAX, DEADLINES, GAME_ID_RE, REASONING_MAX_CHARS, SESSION_ID_RE } from '../src/limits.js';
 
 const manifest = JSON.parse(await fs.readFile(path.join(ROOT, 'conductor.plugin.json'), 'utf8'));
@@ -33,6 +34,37 @@ test('schemas stay within the subset cc accepts', () => {
       for (const k of Object.keys(spec)) assert.ok(PROP_KEYS.has(k), `${name}.${prop}: key ${k}`);
     }
   }
+});
+
+// Invariant: every tool declares an outputSchema cc accepts (so it is served
+// typed, not text-only), and the copies of the shared observation schema agree.
+test('every tool has an outputSchema within the validated subset, root an object', () => {
+  for (const t of manifest.mcp.tools) {
+    assert.ok(t.outputSchema, `${t.name} has an outputSchema`);
+    assert.equal(t.outputSchema.type, 'object', t.name);
+    assert.doesNotThrow(() => checkSchema(t.outputSchema), t.name);
+  }
+});
+
+test('act, reset, observe share one observation schema; start_session adds the script block', () => {
+  const out = Object.fromEntries(manifest.mcp.tools.map((t) => [t.name, t.outputSchema]));
+  assert.deepEqual(out.reset, out.act);
+  assert.deepEqual(out.observe, out.act);
+  const { script, ...rest } = out.start_session.properties;
+  assert.deepEqual({ ...out.start_session, properties: rest, required: out.start_session.required.filter((k) => k !== 'script') }, out.act);
+  assert.ok(out.start_session.required.includes('script'));
+  assert.deepEqual(script, out.script_access.properties.script);
+});
+
+test('no tool description names the old meta channel', () => {
+  for (const t of manifest.mcp.tools) assert.doesNotMatch(t.description, /meta\./, t.name);
+});
+
+test('list_sessions offset is a non-negative integer with no schema default', () => {
+  const o = tools.list_sessions.properties.offset;
+  assert.equal(o.type, 'integer');
+  assert.equal(o.minimum, 0);
+  assert.equal(o.default, undefined);
 });
 
 test('schema bounds equal src/limits.js', () => {

@@ -3,8 +3,14 @@
   "name": "Code ARC",
   "version": "0.1.0",
   "pluginApi": 1,
-  "backend": { "start": "node server.js", "healthPath": "/api/health" },
-  "frontend": { "path": "/", "navLabel": "Code ARC" },
+  "backend": {
+    "start": "node server.js",
+    "healthPath": "/api/health"
+  },
+  "frontend": {
+    "path": "/",
+    "navLabel": "Code ARC"
+  },
   "claudePlugin": "claude",
   "mcp": {
     "endpoint": "/api/mcp",
@@ -13,82 +19,1320 @@
       {
         "name": "list_games",
         "description": "List the ARC-AGI-3 games available to play (game_id, title, tags).",
-        "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+        "inputSchema": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "games"
+          ],
+          "properties": {
+            "games": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "game_id",
+                  "title",
+                  "tags",
+                  "downloaded",
+                  "source"
+                ],
+                "properties": {
+                  "game_id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "downloaded": {
+                    "type": "boolean"
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "bundle",
+                      "web"
+                    ]
+                  }
+                }
+              }
+            },
+            "web_unavailable": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "code",
+                "detail"
+              ],
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "detail": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       },
       {
         "name": "start_session",
-        "description": "Start playing a game. Returns a session_id and the first full frame. A frame is a 64x64 grid, one hex digit per cell (the palette index 0-f), rows labelled by y, columns by x (origin top-left). Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
+        "description": "Start playing a game: the new session_id, the first full frame and the script block (base_url, token, client) for scripted play. A frame row is a string of hex digits, one per cell (the palette index 0-f); x is the column, y the row, origin top-left. Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "game_id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", "description": "A game_id from list_games (the base id before '-' also works)." },
-            "online": { "type": "boolean", "default": false, "description": "Play against arcprize.org with a real scorecard instead of locally." },
-            "allow_reset": { "type": "boolean", "default": true, "description": "false: one run, no retries; reset is refused for the whole session." }
+            "game_id": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+              "description": "A game_id from list_games (the base id before '-' also works)."
+            },
+            "online": {
+              "type": "boolean",
+              "default": false,
+              "description": "Play against arcprize.org with a real scorecard instead of locally."
+            },
+            "allow_reset": {
+              "type": "boolean",
+              "default": true,
+              "description": "false: one run, no retries; reset is refused for the whole session."
+            }
           },
-          "required": ["game_id"],
+          "required": [
+            "game_id"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "game_id",
+            "title",
+            "mode",
+            "status",
+            "state",
+            "levels_completed",
+            "win_levels",
+            "available_actions",
+            "step",
+            "frame_count",
+            "full_reset",
+            "frame",
+            "script"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "game_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "local",
+                "online"
+              ]
+            },
+            "allow_reset": {
+              "const": false
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "live",
+                "ended"
+              ]
+            },
+            "end_reason": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "levels_completed": {
+              "type": "number"
+            },
+            "win_levels": {
+              "type": "number"
+            },
+            "available_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "step": {
+              "type": "integer"
+            },
+            "frame_count": {
+              "type": "number"
+            },
+            "full_reset": {
+              "type": "boolean"
+            },
+            "online": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scorecard_url",
+                "idle_close_at"
+              ],
+              "properties": {
+                "scorecard_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_close_at": {
+                  "type": "string"
+                }
+              }
+            },
+            "frame": {
+              "description": "The frame: hex row strings (one digit per cell, palette index 0-f; x = column, y = row, origin top-left).",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "full"
+                    },
+                    "auto_full": {
+                      "type": "boolean"
+                    },
+                    "rows": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "changed_cells",
+                    "bbox",
+                    "changed_rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "diff"
+                    },
+                    "changed_cells": {
+                      "type": "integer"
+                    },
+                    "bbox": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "x0",
+                            "y0",
+                            "x1",
+                            "y1"
+                          ],
+                          "properties": {
+                            "x0": {
+                              "type": "integer"
+                            },
+                            "y0": {
+                              "type": "integer"
+                            },
+                            "x1": {
+                              "type": "integer"
+                            },
+                            "y1": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "changed_rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "y",
+                          "row"
+                        ],
+                        "properties": {
+                          "y": {
+                            "type": "integer"
+                          },
+                          "row": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "none"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "image"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            },
+            "script": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "base_url",
+                "token",
+                "client"
+              ],
+              "properties": {
+                "base_url": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string"
+                },
+                "client": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       },
       {
         "name": "act",
-        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
-            "action": { "type": "string", "enum": ["ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5", "ACTION6", "ACTION7"] },
-            "x": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Column, ACTION6 only." },
-            "y": { "type": "integer", "minimum": 0, "maximum": 63, "description": "Row, ACTION6 only." },
-            "reasoning": { "type": "string", "maxLength": 4000, "description": "Your current hypothesis, 1-2 sentences." },
-            "frame": { "type": "string", "enum": ["diff", "full", "none", "image"], "default": "diff" },
-            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
-            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
+            "session_id": {
+              "type": "string",
+              "pattern": "^s-[0-9a-f]{12}$"
+            },
+            "action": {
+              "type": "string",
+              "enum": [
+                "ACTION1",
+                "ACTION2",
+                "ACTION3",
+                "ACTION4",
+                "ACTION5",
+                "ACTION6",
+                "ACTION7"
+              ]
+            },
+            "x": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63,
+              "description": "Column, ACTION6 only."
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 63,
+              "description": "Row, ACTION6 only."
+            },
+            "reasoning": {
+              "type": "string",
+              "maxLength": 4000,
+              "description": "Your current hypothesis, 1-2 sentences."
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "diff",
+                "full",
+                "none",
+                "image"
+              ],
+              "default": "diff"
+            },
+            "image_scale": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 16,
+              "description": "frame:'image' only: pixels per cell, default 8."
+            },
+            "image_grid": {
+              "type": "boolean",
+              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true."
+            }
           },
-          "required": ["session_id", "action"],
+          "required": [
+            "session_id",
+            "action"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "game_id",
+            "title",
+            "mode",
+            "status",
+            "state",
+            "levels_completed",
+            "win_levels",
+            "available_actions",
+            "step",
+            "frame_count",
+            "full_reset",
+            "frame"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "game_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "local",
+                "online"
+              ]
+            },
+            "allow_reset": {
+              "const": false
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "live",
+                "ended"
+              ]
+            },
+            "end_reason": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "levels_completed": {
+              "type": "number"
+            },
+            "win_levels": {
+              "type": "number"
+            },
+            "available_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "step": {
+              "type": "integer"
+            },
+            "frame_count": {
+              "type": "number"
+            },
+            "full_reset": {
+              "type": "boolean"
+            },
+            "online": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scorecard_url",
+                "idle_close_at"
+              ],
+              "properties": {
+                "scorecard_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_close_at": {
+                  "type": "string"
+                }
+              }
+            },
+            "frame": {
+              "description": "The frame: hex row strings (one digit per cell, palette index 0-f; x = column, y = row, origin top-left).",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "full"
+                    },
+                    "auto_full": {
+                      "type": "boolean"
+                    },
+                    "rows": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "changed_cells",
+                    "bbox",
+                    "changed_rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "diff"
+                    },
+                    "changed_cells": {
+                      "type": "integer"
+                    },
+                    "bbox": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "x0",
+                            "y0",
+                            "x1",
+                            "y1"
+                          ],
+                          "properties": {
+                            "x0": {
+                              "type": "integer"
+                            },
+                            "y0": {
+                              "type": "integer"
+                            },
+                            "x1": {
+                              "type": "integer"
+                            },
+                            "y1": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "changed_rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "y",
+                          "row"
+                        ],
+                        "properties": {
+                          "y": {
+                            "type": "integer"
+                          },
+                          "row": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "none"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "image"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
-            "reasoning": { "type": "string", "maxLength": 4000 },
-            "frame": { "type": "string", "enum": ["diff", "full", "none", "image"], "default": "full" },
-            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
-            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
+            "session_id": {
+              "type": "string",
+              "pattern": "^s-[0-9a-f]{12}$"
+            },
+            "reasoning": {
+              "type": "string",
+              "maxLength": 4000
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "diff",
+                "full",
+                "none",
+                "image"
+              ],
+              "default": "full"
+            },
+            "image_scale": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 16,
+              "description": "frame:'image' only: pixels per cell, default 8."
+            },
+            "image_grid": {
+              "type": "boolean",
+              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true."
+            }
           },
-          "required": ["session_id"],
+          "required": [
+            "session_id"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "game_id",
+            "title",
+            "mode",
+            "status",
+            "state",
+            "levels_completed",
+            "win_levels",
+            "available_actions",
+            "step",
+            "frame_count",
+            "full_reset",
+            "frame"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "game_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "local",
+                "online"
+              ]
+            },
+            "allow_reset": {
+              "const": false
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "live",
+                "ended"
+              ]
+            },
+            "end_reason": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "levels_completed": {
+              "type": "number"
+            },
+            "win_levels": {
+              "type": "number"
+            },
+            "available_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "step": {
+              "type": "integer"
+            },
+            "frame_count": {
+              "type": "number"
+            },
+            "full_reset": {
+              "type": "boolean"
+            },
+            "online": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scorecard_url",
+                "idle_close_at"
+              ],
+              "properties": {
+                "scorecard_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_close_at": {
+                  "type": "string"
+                }
+              }
+            },
+            "frame": {
+              "description": "The frame: hex row strings (one digit per cell, palette index 0-f; x = column, y = row, origin top-left).",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "full"
+                    },
+                    "auto_full": {
+                      "type": "boolean"
+                    },
+                    "rows": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "changed_cells",
+                    "bbox",
+                    "changed_rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "diff"
+                    },
+                    "changed_cells": {
+                      "type": "integer"
+                    },
+                    "bbox": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "x0",
+                            "y0",
+                            "x1",
+                            "y1"
+                          ],
+                          "properties": {
+                            "x0": {
+                              "type": "integer"
+                            },
+                            "y0": {
+                              "type": "integer"
+                            },
+                            "x1": {
+                              "type": "integer"
+                            },
+                            "y1": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "changed_rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "y",
+                          "row"
+                        ],
+                        "properties": {
+                          "y": {
+                            "type": "integer"
+                          },
+                          "row": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "none"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "image"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       {
         "name": "observe",
-        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'. frame 'image' writes a PNG and returns its path in meta.frame.path; open it with Read.",
+        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" },
-            "frame": { "type": "string", "enum": ["full", "none", "image"], "default": "full" },
-            "image_scale": { "type": "integer", "minimum": 4, "maximum": 16, "description": "frame:'image' only: pixels per cell, default 8." },
-            "image_grid": { "type": "boolean", "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true." }
+            "session_id": {
+              "type": "string",
+              "pattern": "^s-[0-9a-f]{12}$"
+            },
+            "frame": {
+              "type": "string",
+              "enum": [
+                "full",
+                "none",
+                "image"
+              ],
+              "default": "full"
+            },
+            "image_scale": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 16,
+              "description": "frame:'image' only: pixels per cell, default 8."
+            },
+            "image_grid": {
+              "type": "boolean",
+              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true."
+            }
           },
-          "required": ["session_id"],
+          "required": [
+            "session_id"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "game_id",
+            "title",
+            "mode",
+            "status",
+            "state",
+            "levels_completed",
+            "win_levels",
+            "available_actions",
+            "step",
+            "frame_count",
+            "full_reset",
+            "frame"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "game_id": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "local",
+                "online"
+              ]
+            },
+            "allow_reset": {
+              "const": false
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "live",
+                "ended"
+              ]
+            },
+            "end_reason": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "levels_completed": {
+              "type": "number"
+            },
+            "win_levels": {
+              "type": "number"
+            },
+            "available_actions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "step": {
+              "type": "integer"
+            },
+            "frame_count": {
+              "type": "number"
+            },
+            "full_reset": {
+              "type": "boolean"
+            },
+            "online": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "scorecard_url",
+                "idle_close_at"
+              ],
+              "properties": {
+                "scorecard_url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_close_at": {
+                  "type": "string"
+                }
+              }
+            },
+            "frame": {
+              "description": "The frame: hex row strings (one digit per cell, palette index 0-f; x = column, y = row, origin top-left).",
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "full"
+                    },
+                    "auto_full": {
+                      "type": "boolean"
+                    },
+                    "rows": {
+                      "type": [
+                        "array",
+                        "null"
+                      ],
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode",
+                    "changed_cells",
+                    "bbox",
+                    "changed_rows"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "diff"
+                    },
+                    "changed_cells": {
+                      "type": "integer"
+                    },
+                    "bbox": {
+                      "anyOf": [
+                        {
+                          "type": "null"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "x0",
+                            "y0",
+                            "x1",
+                            "y1"
+                          ],
+                          "properties": {
+                            "x0": {
+                              "type": "integer"
+                            },
+                            "y0": {
+                              "type": "integer"
+                            },
+                            "x1": {
+                              "type": "integer"
+                            },
+                            "y1": {
+                              "type": "integer"
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "changed_rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "y",
+                          "row"
+                        ],
+                        "properties": {
+                          "y": {
+                            "type": "integer"
+                          },
+                          "row": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "none"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "mode"
+                  ],
+                  "properties": {
+                    "mode": {
+                      "const": "image"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       {
         "name": "end_session",
-        "description": "End a session and close its scorecard. Returns the final state and score summary. Always call this when done.",
+        "description": "End a session and close its scorecard: the final state and scorecard summary. Always call this when done.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" }
+            "session_id": {
+              "type": "string",
+              "pattern": "^s-[0-9a-f]{12}$"
+            }
           },
-          "required": ["session_id"],
+          "required": [
+            "session_id"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "game_id",
+            "steps",
+            "final"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "game_id": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "integer"
+            },
+            "final": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "state",
+                "levels_completed",
+                "win_levels",
+                "scorecard"
+              ],
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "levels_completed": {
+                  "type": "number"
+                },
+                "win_levels": {
+                  "type": "number"
+                },
+                "scorecard": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "card_id": {
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "total_levels_completed": {
+                      "type": "number"
+                    },
+                    "total_levels": {
+                      "type": "number"
+                    },
+                    "total_actions": {
+                      "type": "number"
+                    },
+                    "environments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "score": {
+                            "type": "number"
+                          },
+                          "levels_completed": {
+                            "type": "number"
+                          },
+                          "actions": {
+                            "type": "number"
+                          },
+                          "resets": {
+                            "type": "number"
+                          },
+                          "completed": {
+                            "type": "boolean"
+                          },
+                          "level_count": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "scorecard_url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "code",
+                  "detail",
+                  "note"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "detail": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         }
       },
       {
@@ -97,21 +1341,201 @@
         "inputSchema": {
           "type": "object",
           "properties": {
-            "session_id": { "type": "string", "pattern": "^s-[0-9a-f]{12}$" }
+            "session_id": {
+              "type": "string",
+              "pattern": "^s-[0-9a-f]{12}$"
+            }
           },
-          "required": ["session_id"],
+          "required": [
+            "session_id"
+          ],
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "session_id",
+            "script"
+          ],
+          "properties": {
+            "session_id": {
+              "type": "string"
+            },
+            "script": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "base_url",
+                "token",
+                "client"
+              ],
+              "properties": {
+                "base_url": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string"
+                },
+                "client": {
+                  "type": "string"
+                }
+              }
+            }
+          }
         }
       },
       {
         "name": "list_sessions",
-        "description": "List game sessions (newest first), e.g. to recover a session_id. scope 'mine' (default) is the ones you started.",
+        "description": "List game sessions (newest first), e.g. to recover a session_id. scope 'mine' (default) is the ones you started. offset skips that many of the newest sessions, to page through a long list.",
         "inputSchema": {
           "type": "object",
           "properties": {
-            "scope": { "type": "string", "enum": ["mine", "all"], "default": "mine" }
+            "scope": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "all"
+              ],
+              "default": "mine"
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Skip this many of the newest sessions, to page through a long list."
+            }
           },
           "additionalProperties": false
+        },
+        "outputSchema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "scope",
+            "total",
+            "sessions"
+          ],
+          "properties": {
+            "scope": {
+              "type": "string",
+              "enum": [
+                "mine",
+                "all"
+              ]
+            },
+            "total": {
+              "type": "integer",
+              "description": "Sessions in scope (all of them, whatever offset was asked)."
+            },
+            "sessions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "session_id",
+                  "game_id",
+                  "title",
+                  "mode",
+                  "status",
+                  "end_reason",
+                  "stalled",
+                  "step",
+                  "owner",
+                  "updated_at"
+                ],
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "game_id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "local",
+                      "online"
+                    ]
+                  },
+                  "allow_reset": {
+                    "const": false
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "live",
+                      "ended"
+                    ]
+                  },
+                  "end_reason": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "stalled": {
+                    "type": "boolean"
+                  },
+                  "state": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "levels_completed": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "win_levels": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "step": {
+                    "type": "integer"
+                  },
+                  "owner": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "sessionId",
+                      "project"
+                    ],
+                    "properties": {
+                      "sessionId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "project": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    }
+                  },
+                  "updated_at": {
+                    "type": "string"
+                  },
+                  "scorecard_url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
         }
       }
     ]

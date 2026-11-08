@@ -20,7 +20,7 @@ export function bootArc({ entry = 'server.js' } = {}) {
 
 // Calls a tool the way cc does: POST api/mcp with the caller identity.
 export async function mcp(url, tool, args = {}, caller = { sessionId: 'demo-session', project: 'demo' }) {
-  const res = await fetch(`${url}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool, arguments: args, caller }) });
+  const res = await fetch(`${url}/api/mcp`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tool, arguments: args, caller, format: 'json' }) });
   return res.json();
 }
 

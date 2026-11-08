@@ -5,7 +5,10 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
+import manifest from '../conductor.plugin.json' with { type: 'json' };
+import { validate } from './_jsonSchemaSubset.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const FAKES = path.join(ROOT, 'sidecar', 'tests', 'fakes');
@@ -44,8 +47,16 @@ export async function startApp(t, { env, config: extra, ...opts } = {}) {
     await app.close();
   };
   t.after(close);
-  const mcp = (tool, args = {}, caller = { sessionId: 'agent-a', project: 'proj' }) => app.mcp.handle({ tool, arguments: args, caller });
-  return { app, url, env, log, mcp, close, calls: () => readCalls(env.dataDir) };
+  const call = (format) => async (tool, args = {}, caller = { sessionId: 'agent-a', project: 'proj' }) => {
+    const r = await app.mcp.handle({ tool, arguments: args, caller, format });
+    TOOL_OF.set(r, tool);
+    return r;
+  };
+  // `mcp` asks for the json view and returns the raw reply: unwrap it with ok()
+  // or refusal(). `mcpText` asks for the text view.
+  const mcp = call('json');
+  const mcpText = call('text');
+  return { app, url, env, log, mcp, mcpText, close, calls: () => readCalls(env.dataDir) };
 }
 
 export async function readCalls(dataDir) {
@@ -57,10 +68,34 @@ export async function readCalls(dataDir) {
   }
 }
 
+// Which tool produced a reply from startApp's mcp helpers, for ok().
+const TOOL_OF = new WeakMap();
+const OUTPUT_SCHEMAS = Object.fromEntries(manifest.mcp.tools.map((t) => [t.name, t.outputSchema]));
+
+// A json success reply: exactly {structured}, valid against the tool's manifest
+// outputSchema (the check cc applies). Returns the structured data. A reply
+// from a direct app.mcp.handle call needs the tool name: ok(r, tool).
+export function ok(r, tool = TOOL_OF.get(r)) {
+  assert.deepEqual(Object.keys(r), ['structured'], `not a json success: ${JSON.stringify(r)}`);
+  const errors = validate(OUTPUT_SCHEMAS[tool], r.structured);
+  assert.deepEqual(errors, [], `${tool} reply breaks its outputSchema`);
+  return r.structured;
+}
+
+// A refusal reply: {error, code, details?} and nothing else, with `code`.
+// Returns it (extras under .details).
+export function refusal(r, code) {
+  assert.ok(Object.keys(r).every((k) => ['error', 'code', 'details'].includes(k)), `not a refusal shape: ${JSON.stringify(r)}`);
+  assert.equal(typeof r.error, 'string');
+  assert.equal(r.code, code, JSON.stringify(r));
+  if ('details' in r) assert.ok(r.details && typeof r.details === 'object' && Object.keys(r.details).length > 0);
+  return r;
+}
+
 export async function startGame(mcp, gameId = 'fake-maze', extra = {}, caller) {
   const r = await mcp('start_session', { game_id: gameId, ...extra }, caller);
-  if (!r.meta) throw new Error(`start_session failed: ${JSON.stringify(r)}`);
-  return r.meta.session_id;
+  if (!r.structured) throw new Error(`start_session failed: ${JSON.stringify(r)}`);
+  return r.structured.session_id;
 }
 
 export const json = (url, init = {}) => fetch(url, init).then(async (res) => ({ status: res.status, headers: res.headers, body: await res.json().catch(() => null) }));

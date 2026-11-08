@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createBootstrap, DIVERGED_FIX, FIX, PIP_VERSION } from '../src/bootstrap.js';
 import { bundleInstallArgs } from '../src/bundle.js';
-import { captureLog, freshEnv, json, startApp, until } from './_helpers.mjs';
+import { captureLog, freshEnv, json, refusal, startApp, until } from './_helpers.mjs';
 import { makeBundleDir, settlesWithin, TARGET } from './_bundle.mjs';
 
 const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
@@ -167,29 +167,28 @@ test('while installing, health answers and toolkit tools refuse TOOLKIT_NOT_READ
   assert.equal((await fetch(`${url}/api/health`)).status, 200);
   await until(async () => (await json(`${url}/api/status`)).body.toolkit.state === 'installing');
   assert.equal((await fetch(`${url}/api/health`)).status, 200);
-  const r = (await mcp('list_games')).result;
-  assert.equal(r.code, 'TOOLKIT_NOT_READY');
-  assert.equal(r.state, 'installing');
-  assert.equal((await mcp('start_session', { game_id: 'fake-maze' })).result.code, 'TOOLKIT_NOT_READY');
+  const r = refusal(await mcp('list_games'), 'TOOLKIT_NOT_READY');
+  assert.equal(r.details.state, 'installing');
+  refusal(await mcp('start_session', { game_id: 'fake-maze' }), 'TOOLKIT_NOT_READY');
   assert.equal((await json(`${url}/api/status`)).body.toolkit.state, 'installing');
 });
 
 test('failed and diverged installs refuse with detail and a fix', async (t) => {
   const failed = await checkout(t);
   const a = await startApp(t, { env: failed.env, config: { checkoutDir: failed.dir, python: null }, spawn: fakeSpawn(() => ({ code: 127 })).spawn });
-  const fr = await (async () => { for (;;) { const r = (await a.mcp('list_games')).result; if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
-  assert.equal(fr.code, 'TOOLKIT_UNAVAILABLE');
-  assert.match(fr.detail, /no Python/);
-  assert.ok(fr.fix);
+  const fr = await (async () => { for (;;) { const r = await a.mcp('list_games'); if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
+  refusal(fr, 'TOOLKIT_UNAVAILABLE');
+  assert.match(fr.details.detail, /no Python/);
+  assert.ok(fr.details.fix);
 
   const div = await checkout(t);
   const shared = path.join(div.env.tmp, 'shared');
   await fs.mkdir(shared);
   await fs.symlink(shared, path.join(div.dir, '.venv'));
   const b = await startApp(t, { env: div.env, config: { checkoutDir: div.dir, python: null }, spawn: fakeSpawn(() => ({ code: 0 })).spawn });
-  const dr = await (async () => { for (;;) { const r = (await b.mcp('list_games')).result; if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
-  assert.equal(dr.code, 'DEPS_DIVERGED');
-  assert.match(dr.fix, /rm \.venv/);
+  const dr = await (async () => { for (;;) { const r = await b.mcp('list_games'); if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
+  refusal(dr, 'DEPS_DIVERGED');
+  assert.match(dr.details.fix, /rm \.venv/);
 });
 
 // A real detached child that never exits on its own, standing in for pip.
