@@ -1,10 +1,10 @@
 // allow_reset:false sessions (docs/protocol.md → RESET_DISABLED): one run, no
-// resets, from the tools and from the script API.
+// resets, from the tools.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { json, ok, refusal, sendJsonReq, startApp, startGame } from './_helpers.mjs';
+import { json, ok, refusal, startApp, startGame } from './_helpers.mjs';
 import { readNet } from './_bundle.mjs';
 
 const FAST = { stepRate: { max: 1000, windowMs: 1000 } };
@@ -85,21 +85,6 @@ test('after a full win a one-run session is terminal too', async (t) => {
   const refused = refusal(await mcp('act', { session_id: sid, action: 'ACTION1' }), 'GAME_FINISHED');
   assert.equal(refused.details.allow_reset, false);
   refusal(await mcp('reset', { session_id: sid }), 'RESET_DISABLED');
-});
-
-test('the script route refuses reset the same way', async (t) => {
-  const { mcp, calls } = await startApp(t, FAST);
-  const start = ok(await mcp('start_session', { game_id: 'fake-maze', allow_reset: false }));
-  const { base_url: base, token } = start.script;
-  const headers = { authorization: `Bearer ${token}` };
-  const attach = await sendJsonReq(`${base}attach`, 'POST', { note: 'one run' }, headers);
-  assert.equal(attach.body.allow_reset, false);
-  const before = await resets(calls);
-  const r = await sendJsonReq(`${base}reset`, 'POST', { run: attach.body.run }, headers);
-  assert.equal(r.status, 200);
-  assert.equal(r.body.ok, false);
-  assert.equal(r.body.code, 'RESET_DISABLED');
-  assert.equal(await resets(calls), before);
 });
 
 test('online one-run sessions: refusal is local and spends no rate budget', async (t) => {

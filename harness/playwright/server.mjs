@@ -1,5 +1,5 @@
 // server.js with a raised per-session step rate, for the harness's
-// 300-step script burst only.
+// 300-step scripted burst only.
 import { createApp } from '../../src/app.js';
 import { loadConfig } from '../../src/config.js';
 

@@ -6,7 +6,7 @@ import { ROOT } from './_helpers.mjs';
 import { IMAGE_SPEC } from '../src/boardImage.js';
 import { createMcp } from '../src/mcp.js';
 import { checkSchema } from './_jsonSchemaSubset.mjs';
-import { ACTIONS, COORD_MAX, DEADLINES, GAME_ID_RE, REASONING_MAX_CHARS, SESSION_ID_RE } from '../src/limits.js';
+import { ACTIONS, COORD_MAX, DEADLINES, GAME_ID_RE, NOTE_MAX_CHARS, REASONING_MAX_CHARS, SESSION_ID_RE } from '../src/limits.js';
 
 const manifest = JSON.parse(await fs.readFile(path.join(ROOT, 'conductor.plugin.json'), 'utf8'));
 const tools = Object.fromEntries(manifest.mcp.tools.map((t) => [t.name, t.inputSchema]));
@@ -46,14 +46,11 @@ test('every tool has an outputSchema within the validated subset, root an object
   }
 });
 
-test('act, reset, observe share one observation schema; start_session adds the script block', () => {
+test('act, reset, observe and start_session share one observation schema', () => {
   const out = Object.fromEntries(manifest.mcp.tools.map((t) => [t.name, t.outputSchema]));
   assert.deepEqual(out.reset, out.act);
   assert.deepEqual(out.observe, out.act);
-  const { script, ...rest } = out.start_session.properties;
-  assert.deepEqual({ ...out.start_session, properties: rest, required: out.start_session.required.filter((k) => k !== 'script') }, out.act);
-  assert.ok(out.start_session.required.includes('script'));
-  assert.deepEqual(script, out.script_access.properties.script);
+  assert.deepEqual(out.start_session, out.act);
 });
 
 test('no tool description names the old meta channel', () => {
@@ -68,7 +65,7 @@ test('list_sessions offset is a non-negative integer with no schema default', ()
 });
 
 test('schema bounds equal src/limits.js', () => {
-  const sessionTools = ['act', 'reset', 'observe', 'end_session', 'script_access'];
+  const sessionTools = ['act', 'reset', 'observe', 'end_session', 'note'];
   for (const t of sessionTools) assert.equal(tools[t].properties.session_id.pattern, SESSION_ID_RE.source, t);
   assert.equal(tools.start_session.properties.game_id.pattern, GAME_ID_RE.source);
   for (const c of ['x', 'y']) {
@@ -77,10 +74,11 @@ test('schema bounds equal src/limits.js', () => {
   }
   assert.equal(tools.act.properties.reasoning.maxLength, REASONING_MAX_CHARS);
   assert.equal(tools.reset.properties.reasoning.maxLength, REASONING_MAX_CHARS);
+  assert.equal(tools.note.properties.note.maxLength, NOTE_MAX_CHARS);
   assert.deepEqual(tools.act.properties.action.enum, [...ACTIONS]);
 });
 
-test('board image options equal clients/board_image.json and carry no schema default', () => {
+test('board image options equal src/board_image.json and carry no schema default', () => {
   for (const t of ['act', 'reset', 'observe']) {
     const p = tools[t].properties;
     assert.ok(p.frame.enum.includes('image'), t);

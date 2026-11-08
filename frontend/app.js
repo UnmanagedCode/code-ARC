@@ -2,7 +2,7 @@
 // kept live over SSE. Route state (?session=&step=) lives in the query string.
 import { getJson, subscribe } from './api.js';
 import { createGrid } from './grid.js';
-import { mergeNotes, noteFor, sourceOf } from './runs.js';
+import { hasRun, mergeNotes, noteFor, sourceOf } from './runs.js';
 import { safeHref } from './safeHref.js';
 import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
 import { DEFAULT_INTERVAL_MS, INTERVALS_MS, createPlayback } from './playback.js';
@@ -153,10 +153,10 @@ function renderStep() {
   writeRoute();
 }
 
-// A script step shows its run's note, then its own reasoning.
+// A script step in a run shows the run's note, then its own reasoning.
 function renderReasoning(step) {
   const box = $('reasoning');
-  if (sourceOf(step) !== 'script') {
+  if (!hasRun(step)) {
     box.textContent = step.reasoning || '(no reasoning given)';
     return;
   }

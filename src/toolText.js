@@ -7,10 +7,6 @@ import { LIST_SESSIONS_TEXT_PAGE } from './limits.js';
 
 const list = (xs) => (xs.length ? xs.join(', ') : 'none');
 
-export function scriptText(s) {
-  return `base_url ${s.base_url} · token ${s.token} · client ${s.client}`;
-}
-
 function frameLine(f) {
   if (f.mode === 'none') return null;
   if (f.mode === 'image') {
@@ -77,8 +73,8 @@ export function endText(r) {
   return lines.join('\n');
 }
 
-export function scriptAccessText(r) {
-  return `New script token for ${r.session_id}: ${scriptText(r.script)}. The previous token no longer works and the current run is closed: attach again with a note.`;
+export function noteText(r) {
+  return `Run ${r.run} opened on ${r.session_id}: steps a run_code program takes show under this note until the next one.`;
 }
 
 // One page of LIST_SESSIONS_TEXT_PAGE from `r.sessions` (already starting at

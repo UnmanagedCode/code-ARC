@@ -11,8 +11,8 @@
   - Manual navigation (scrubber, previous/next, an **Action log** row, a deep link) enters Replay, paused. **Live** jumps to the newest step and paces only later arrivals; a session opened without a `step` shows its newest step directly (recorded history is not paced).
   - **Interval:** a selector with the choices in `INTERVALS_MS` (`frontend/playback.js`), default `DEFAULT_INTERVAL_MS`; it applies to both modes and is not kept across page loads.
   - Ended sessions can be replayed. Replay covers the steps the viewer loaded (the newest `VIEWER_STEPS_MAX`, `frontend/app.js`).
-- **Reasoning:** the selected step's reasoning, exactly as the agent wrote it. For a scripted step, the note of its run comes first ("Run k note: …").
-- **Scripted play:** steps an agent's script took carry a **script** badge in the action log, and each run starts with a **Script run k — <note>** header saying what the script tries and why. The step summary says `script` or `tool`. Notes arrive live like steps.
+- **Reasoning:** the selected step's reasoning, exactly as the agent wrote it. For a scripted step in a run, the note of its run comes first ("Run k note: …").
+- **Scripted play:** steps a `run_code` program took carry a **script** badge in the action log, and each run starts with a **Script run k — <note>** header saying what the program tries and why. A script step taken before the program's first note has the badge and no header. The step summary says `script` or `tool`. Notes arrive live like steps.
 - **Live updates:** new steps and session changes arrive as they happen, even from a script stepping at the rate cap (the action log gets each row at once; the shown step is paced, see Live mode); a reconnect fetches only what it missed.
 - **Deep links:** the URL carries `?session=<id>&step=<n>`; pasting it reopens that step in Replay, paused. Live mode writes no `step`.
 - **Toolkit banner:** shown while the toolkit is installing, or with the error and the fix when installing failed or the venv diverged (**Bundle rejected** for an offline bundle that failed verification).
@@ -26,15 +26,15 @@
 
 ## Agent tools
 
-`list_games`, `start_session`, `act`, `reset`, `observe`, `end_session`, `list_sessions`, `script_access` — contracts in [protocol.md](protocol.md).
+`list_games`, `start_session`, `act`, `reset`, `observe`, `end_session`, `list_sessions`, `note` — contracts in [protocol.md](protocol.md).
 
 - Frames come as text (one hex digit per cell with coordinate headers); `act` sends only the changed rows by default, which keeps a typical move to a few lines.
-- **Board images:** `frame:"image"` on `act`, `reset` or `observe` writes the frame as a PNG (palette colours, optional dashed grid with labelled coordinates every few cells) and returns its path; the agent opens it with Read. An image shows layout, shapes and symmetry for a fraction of a full text frame's tokens; text frames stay the way to read exact cells. Scripts get the same picture with `Observation.save_png`. Options and file lifecycle: [protocol.md](protocol.md) → Board image.
+- **Board images:** `frame:"image"` on `act`, `reset` or `observe` writes the frame as a PNG (palette colours, optional dashed grid with labelled coordinates every few cells) and returns its path; the agent opens it with Read. An image shows layout, shapes and symmetry for a fraction of a full text frame's tokens; text frames stay the way to read exact cells. Scripts get the same picture with `frame:"image"` and read the PNG path from `frame.path`. Options and file lifecycle: [protocol.md](protocol.md) → Board image.
 - `online:true` on `start_session` plays against arcprize.org with a real scorecard (link in the result and the viewer). Rate limits and idle closes are reported as refusals, never retried silently.
 - **One-run sessions:** `allow_reset:false` on `start_session` refuses every reset (`RESET_DISABLED`); after `GAME_OVER` or a full win the session stays live until `end_session`. The viewer marks it with a "No reset" badge and a "Resets: off (one run)" header fact. The `play-arc` skill forbids learning a game from its source, bundles or toolkit internals.
-- The tools serve cc's two result formats: json is the complete data (for scripts and the REST alias), text is prose for agents; `list_sessions` text pages with `offset`, json lists every session. Contracts: [protocol.md](protocol.md) → MCP tools.
+- The tools serve cc's two result formats: json is the complete data (for `run_code` programs, via cc's REST alias), text is prose for agents; `list_sessions` text pages with `offset`, json lists every session. Contracts: [protocol.md](protocol.md) → MCP tools.
 - Only the agent session that started a game can act on or end it; anyone can observe.
-- **Agent scripting:** for sweeps, searches or replaying a route, an agent writes a Python script with the bundled client (`clients/code_arc.py`, path in the `script` block of `start_session`'s result). The script attaches with a note, chains actions, branches on results and reads whole frames as ints; its moves go through the same checks and log as tool moves. A lost token is replaced with `script_access`. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). Contracts: [script-api.md](script-api.md).
+- **Agent scripting:** for sweeps, searches or replaying a route, an agent uses cc's `run_code`: a program calls `cc.code_arc.note` (what it tries and why), then `cc.code_arc.act`/`reset`, branches on the json results and returns a digest. Its steps go through the same checks and log as tool steps, recorded as scripted under the latest note. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). `run_code` is unavailable for a session whose project lives on a remote System. Contracts: [scripted-play.md](scripted-play.md).
 
 ## Offline bundle
 
@@ -45,4 +45,4 @@
 
 ## The `play-arc` skill
 
-Shipped as a Claude Code plugin (`claude/`), loaded into every cc session through the manifest's `claudePlugin`. It tells an agent how to probe unknown games, keep token use low (diffs, a board image when it needs the layout), write reasoning the user can follow, when to script with notes, and react to each refusal code.
+Shipped as a Claude Code plugin (`claude/`), loaded into every cc session through the manifest's `claudePlugin`. It tells an agent how to probe unknown games, keep token use low (diffs, a board image when it needs the layout), write reasoning the user can follow, when to script with `run_code` and notes, and react to each refusal code.

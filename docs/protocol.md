@@ -1,6 +1,6 @@
 # Protocol
 
-Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, SSE events and the sidecar protocol. The script HTTP API and its Python client: [script-api.md](script-api.md). Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool input and output schemas live in `conductor.plugin.json` (`inputSchema`, `outputSchema`).
+Interface contracts: MCP tools, results, refusal codes, frame text, the HTTP API, SSE events and the sidecar protocol. Scripted play: [scripted-play.md](scripted-play.md). Bounds are named by their constant in `src/limits.js` (or `src/online.js`); the tool input and output schemas live in `conductor.plugin.json` (`inputSchema`, `outputSchema`).
 
 ## MCP tools
 
@@ -21,19 +21,20 @@ The tables below give each tool's json `structured` fields; the text view of eac
 | Tool | Arguments | `structured` (json view) |
 |---|---|---|
 | `list_games` | — | `{games:[{game_id, title, tags, downloaded, source}], web_unavailable?}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; `web_unavailable: {code, detail}` is present when, with a bundle, the web game list failed or is still loading (the text view says only the bundle's games are listed); a failed game-list fetch without a bundle is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
-| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation (first frame full) plus `script` |
+| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `true`; `false` = one run: every `reset` is refused `RESET_DISABLED`) | observation (first frame full) |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid` | observation from the stored last step; no toolkit call |
 | `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
 | `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry carries `allow_reset:false` when set. json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
-| `script_access` | `session_id` | `{session_id, script}`: a fresh script token; the previous token stops working at once and the current run closes (next script call → `NOTE_REQUIRED`). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER`, where `NOT_OWNER` is strict here: refused unless the caller's `sessionId` is a non-empty string equal to the owner's, so a null or empty caller is refused, and a session whose owner is null or empty can't be rotated by anyone |
+| `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
 
-Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `script_access` and `start_session` → a `base_url · token · client` line (the only places the token appears, in both formats).
+Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `note` → a line naming the run opened.
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
 - `mine` = sessions whose owner `sessionId` equals the caller's (both `null` counts as equal).
-- Ownership elsewhere is a collision guard: `NOT_OWNER` only when owner and caller `sessionId` are both known and differ. `script_access` is the exception (above).
+- Ownership is a collision guard: `NOT_OWNER` only when owner and caller `sessionId` are both known and differ.
+- `format` also decides how a step is recorded: a json call's `act`/`reset` (and `start_session`'s `START`) is `source:"script"`, a text call's is `source:"tool"` ([scripted-play.md](scripted-play.md)).
 
 ### Observation result
 
@@ -53,7 +54,6 @@ json: `structured` is the object below. text: the same data as prose: a header l
 | `full_reset` | the last reset restarted the whole game |
 | `frame` | by `mode`: `{mode:"full", rows}` (`rows`: hex row strings, `null` with no stored frame; plus `auto_full:true` when a `diff` was asked and there was no previous frame to compare); `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null, changed_rows:[{y, row}]}` (every changed row, however many); `{mode:"none"}`; for `frame:"image"`: `{mode:"image", path}` (absolute path of the PNG), `{mode:"image", unavailable:"no_frame"}` (no frame stored), `{mode:"image", unavailable:"session_ended"}` (it ended during the call), or `{mode:"image", error}` (the file could not be written; the action still happened). `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
 | `online` | online sessions: `{scorecard_url, idle_close_at}` (ISO time) |
-| `script` | `start_session` only: `{base_url, token, client}` (see [script-api.md](script-api.md)); no other observation carries it |
 
 The observation schema is written out in each of `act`, `reset`, `observe` and `start_session` (the manifest has no `$ref`); `tests/manifest.test.mjs` pins the copies equal. Toolkit-sourced numbers are typed `number` and `state` a plain string, so a toolkit value never makes cc reject a reply (`PLUGIN_REPLY_INVALID`).
 
@@ -66,7 +66,7 @@ The observation schema is written out in each of `act`, `reset`, `observe` and `
 
 ### Board image
 
-`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and gives its absolute path (`frame.path` in json, named in the text); the agent opens it with its Read tool. Names written as `palette`, `scale.*` and `grid.*` below are keys of `clients/board_image.json`, the single source for the image's numbers and colours, read by both `src/boardImage.js` and `Observation.save_png` in `clients/code_arc.py`. `FRAME_SIDE` is the largest frame side, `COORD_MAX + 1` from `src/limits.js` (the Python client checks the same bound).
+`frame:"image"` on `act`, `reset` or `observe` renders the observation's frame to a PNG file and gives its absolute path (`frame.path` in json, named in the text); the agent opens it with its Read tool. Names written as `palette`, `scale.*` and `grid.*` below are keys of `src/board_image.json`, the single source for the image's numbers and colours, read by `src/boardImage.js`. `FRAME_SIDE` is the largest frame side, `COORD_MAX + 1` from `src/limits.js`.
 
 | Option | Values | Default |
 |---|---|---|
@@ -92,7 +92,7 @@ The observation schema is written out in each of `act`, `reset`, `observe` and `
 
 ### Refusals
 
-`{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw). The script API keeps the extras flat beside `reason` ([script-api.md](script-api.md)); only MCP nests them.
+`{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw).
 
 Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, and image options without `frame:"image"`, come before all of these.
 
@@ -108,7 +108,7 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it (with a bundle and no network, games outside the bundle are not listed: a local start of one gets a `detail` saying the web game list could not be fetched) | `detail` (bundle case only) |
 | `ACTION_UNAVAILABLE` | action not in `available_actions` | `available_actions` |
 | `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER`; on an `allow_reset:false` session the reason says the run is over (call `end_session`) | `state` (plus `allow_reset:false` on such a session) |
-| `RESET_DISABLED` | any `reset` (tool or script) on an `allow_reset:false` session; never sent, no step recorded, no rate budget spent (online included). A finished online run left live is closed by the idle sweep after `ONLINE_IDLE_CLOSE_MS`, so `end_session` promptly | `allow_reset:false` |
+| `RESET_DISABLED` | any `reset` on an `allow_reset:false` session; never sent, no step recorded, no rate budget spent (online included). A finished online run left live is closed by the idle sweep after `ONLINE_IDLE_CLOSE_MS`, so `end_session` promptly | `allow_reset:false` |
 | `TOOLKIT_NOT_READY` | venv still being checked/installed (or stopped); or, for `start_session`, an API key change in progress (`state:"reconfiguring"`) | `state`, `phase` |
 | `TOOLKIT_UNAVAILABLE` | venv install failed, or the offline bundle was rejected ([bundle.md](bundle.md)) | `detail` (≤ `DETAIL_MAX`), `fix` |
 | `DEPS_DIVERGED` | worktree's symlinked `.venv` doesn't match its `requirements.txt` | `detail`, `fix` |
@@ -117,19 +117,16 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `SIDECAR_EXITED` | the sidecar died; live sessions end with `sidecar_exit` | `detail` (redacted stderr tail) |
 | `NETWORK_ERROR` | timeout / connection failure reaching arcprize.org; also `start_session` `online:true` for a game outside the offline bundle while the web game list can't be fetched | `detail` |
 | `RATE_LIMITED` | local guard for `ONLINE_RPM_LIMIT` (not sent), or a 429 from arcprize.org | `retry_after_ms` (local guard) |
-| `STEP_RATE_LIMITED` | the session took `STEP_RATE_MAX` steps in the last `STEP_RATE_WINDOW_MS` (`act`/`reset` from tools and scripts, script `attach`/`note`); refused, never delayed, not sent | `retry_after_ms` |
+| `STEP_RATE_LIMITED` | the session took `STEP_RATE_MAX` steps in the last `STEP_RATE_WINDOW_MS` (`act`/`reset` in either format, and `note`); refused, never delayed, not sent | `retry_after_ms` |
 | `SESSION_STEP_LIMIT` | `act`/`reset` on a session whose step count reached `SESSION_STEPS_MAX`; `end_session` and start a new one | |
-| `TOKEN_INVALID` | script routes, live session: the bearer token is missing, malformed, wrong or replaced by `script_access` (HTTP 401). An ended session (also after a backend restart) answers `SESSION_ENDED` before any token check | |
-| `NOTE_REQUIRED` | script `act`/`reset`/`note` with no run open (no attach yet, or `script_access` closed it) | |
-| `RUN_SUPERSEDED` | script `act`/`reset`/`note` naming a run that a newer `attach`/`note` replaced | |
-| `TOO_MANY_NOTES` | script `attach`/`note` past `NOTES_MAX` notes on the session | |
+| `TOO_MANY_NOTES` | `note` past `NOTES_MAX` notes on the session (json steps still play under the last run) | |
 | `SCORECARD_CLOSED` | arcprize.org no longer knows the game/scorecard; the session ends with `scorecard_auto_closed` | `detail` |
 
 `end_reason` values: `ended_by_agent`, `scorecard_auto_closed`, `sidecar_exit`, `backend_restart`.
 
 ## HTTP API
 
-Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every response carries the headers in `SECURITY_HEADERS` (`src/http.js`). Non-GET routes require `content-type: application/json` (else 415) and a same-origin `Sec-Fetch-Site` (else 403; without that header, any `Origin` is refused). The script routes go further: see [script-api.md](script-api.md).
+Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every response carries the headers in `SECURITY_HEADERS` (`src/http.js`). Non-GET routes require `content-type: application/json` (else 415) and a same-origin `Sec-Fetch-Site` (else 403; without that header, any `Origin` is refused).
 
 | Route | Behaviour |
 |---|---|
@@ -138,13 +135,12 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | `GET api/sessions?before&limit` | `{sessions:[meta…], total, next}`: newest first, at most `SESSIONS_PAGE_MAX`, starting after the session id `before` (400 if malformed); `next` is the `before` for the following page, `null` at the end; `total` counts every stored session |
 | `GET api/sessions/:id` | meta; 404 `SESSION_UNKNOWN` |
 | `GET api/sessions/:id/steps?from&limit` | `{steps:[…]}` with `n ≥ from`, at most `STEPS_PAGE_MAX` |
-| `GET api/sessions/:id/notes` | `{notes:[…]}`, every script run note of the session in run order (at most `NOTES_MAX`); 404 `SESSION_UNKNOWN` |
+| `GET api/sessions/:id/notes` | `{notes:[…]}`, every run note of the session in run order (at most `NOTES_MAX`); 404 `SESSION_UNKNOWN` |
 | `GET api/events` | SSE (below) |
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
 | `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting; 409 `KEY_CHANGE_IN_PROGRESS` while another key change is being saved. Error bodies are `{error, code}`; `error` is the reason to show the user |
 | `DELETE api/settings/api-key` | clears → `{apiKey}`; the same 409s |
 | `POST api/mcp` | the MCP endpoint |
-| `POST api/play/:id/<op>` | the script HTTP API (below) |
 
 Static files: an allowlist of `frontend/` files (`src/static.js`); everything else, including `/pluginBridge.js` and `/pluginTheme.css`, is a real 404.
 
@@ -156,12 +152,12 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 `{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
 
-- `source` is missing on steps recorded before scripting existed: read it as `tool`. `run` is set on script steps only.
+- `source` is missing on steps recorded before scripting existed: read it as `tool`. `source:"script"` = a json-format call; `run` is set only on a script step taken after a note (a script step before the first note has none).
 - On disk a step line carries `frame_z` (base64 raw deflate of the rows joined by `\n`) instead of `frame`; every API and SSE step has `frame` rows. Lines with a plain `frame` still read. A corrupt or tampered stored frame reads as `frame: null` ([architecture.md](architecture.md) → On-disk state).
 
 ### Note
 
-`{run, ts, text, from_step}`: the note that opened script run `run`; `from_step` = the session's step count + 1 when it was written (the first step the run can take). Stored in `sessions/<sid>/notes.jsonl`; `text` is stored as sent (untrimmed).
+`{run, ts, text, from_step}`: the note that opened run `run` (the `note` tool); `from_step` = the session's step count + 1 when it was written (the first step the run can take). Stored in `sessions/<sid>/notes.jsonl`; `text` is stored as sent (untrimmed).
 
 ### SSE events (`api/events`)
 
@@ -171,13 +167,9 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 | `sessions` | the newest page, same shape as `GET api/sessions` (`{sessions, total, next}`); second on every connection. Older sessions: `GET api/sessions?before=<next>` |
 | `session` | one session meta (create/update) |
 | `step` | `{session_id, step}` |
-| `note` | `{session_id, note}` (a script attached or changed its plan) |
+| `note` | `{session_id, note}` (a program opened a run) |
 
 At most `SSE_MAX_CLIENTS` connections: a new one evicts the most backed-up connection, else the oldest. The preference protects a viewer only from stalled or backed-up clients; a client that keeps opening fresh connections (no backlog) still evicts by age and is limited only by `SSE_MAX_CLIENTS` turnover. A client that is still behind from an earlier write (no drain yet) with more than `SSE_MAX_BUFFERED_BYTES` unsent is disconnected; one large write (the initial state) never trips this on its own. Event ids are `<boot>-<n>`; a reconnect with `Last-Event-ID` (or `?lastEventId=`) replays missed events from a small ring. `: ping` keepalives.
-
-## Script HTTP API
-
-`POST api/play/:id/<op>` and the Python client (`clients/code_arc.py`): see [script-api.md](script-api.md).
 
 ## Sidecar protocol
 

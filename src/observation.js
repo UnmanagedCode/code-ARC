@@ -1,6 +1,5 @@
-// The observation fields both surfaces return for a session service result
-// {meta, obs, online}: the MCP tools add the title and the frame text, the
-// script routes add the raw frame rows.
+// The observation fields every observation-returning tool shares, for a session
+// service result {meta, obs, online}; src/mcp.js adds the title and the frame.
 import { actionName, visibleActions } from './sessions.js';
 
 export function observationFields({ meta: s, obs, online }) {

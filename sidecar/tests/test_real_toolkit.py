@@ -111,7 +111,7 @@ print(json.dumps({"game": gid, "listed": listed, "stepped": obs is not None}))
         with open(os.path.join(ROOT, "frontend", "palette.js"), encoding="utf-8") as f:
             ours = {int(k): v for k, v in re.findall(r"^\s*(\d+): '(#[0-9A-F]{8})'", f.read(), re.M)}
         self.assertEqual(ours, toolkit)
-        with open(os.path.join(ROOT, "clients", "board_image.json"), encoding="utf-8") as f:
+        with open(os.path.join(ROOT, "src", "board_image.json"), encoding="utf-8") as f:
             image = json.load(f)["palette"]
         self.assertEqual({i: c + "FF" for i, c in enumerate(image)}, toolkit)
 

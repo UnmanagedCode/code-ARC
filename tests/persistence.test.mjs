@@ -83,15 +83,16 @@ test('step lines store a compressed frame; the API returns the same rows; legacy
 test('notes.jsonl survives a restart', async (t) => {
   const env = await freshEnv(t);
   const first = await startApp(t, { env });
-  const r = await first.mcp('start_session', { game_id: 'fake-maze' });
-  const { session_id: sid, script } = ok(r);
-  const res = await sendJsonReq(`${script.base_url}attach`, 'POST', { note: 'kept across restarts' }, { authorization: `Bearer ${script.token}` });
-  assert.equal(res.body.run, 1);
+  const sid = await startGame(first.mcp);
+  assert.equal(ok(await first.mcp('note', { session_id: sid, note: 'kept across restarts' })).run, 1);
+  ok(await first.mcp('act', { session_id: sid, action: 'ACTION4' }));
   await first.close();
   assert.equal(await fs.stat(path.join(env.dataDir, 'sessions', sid, 'notes.jsonl')).then((s) => s.mode & 0o777), 0o600);
   const second = await startApp(t, { env });
   const notes = (await json(`${second.url}/api/sessions/${sid}/notes`)).body.notes;
   assert.deepEqual(notes.map((n) => [n.run, n.text, n.from_step]), [[1, 'kept across restarts', 1]]);
+  const step = (await json(`${second.url}/api/sessions/${sid}/steps?from=1`)).body.steps[0];
+  assert.deepEqual([step.source, step.run], ['script', 1], 'a stored script step keeps its source and run');
 });
 
 test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversized or non-hex frames', async (t) => {

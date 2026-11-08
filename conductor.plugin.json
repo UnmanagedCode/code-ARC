@@ -90,7 +90,7 @@
       },
       {
         "name": "start_session",
-        "description": "Start playing a game: the new session_id, the first full frame and the script block (base_url, token, client) for scripted play. A frame row is a string of hex digits, one per cell (the palette index 0-f); x is the column, y the row, origin top-left. Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
+        "description": "Start playing a game: the new session_id, the first full frame. A frame row is a string of hex digits, one per cell (the palette index 0-f); x is the column, y the row, origin top-left. Set online:true only when the user wants an arcprize.org scorecard: online play is slower and rate-limited.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -131,8 +131,7 @@
             "step",
             "frame_count",
             "full_reset",
-            "frame",
-            "script"
+            "frame"
           ],
           "properties": {
             "session_id": {
@@ -341,33 +340,13 @@
                   }
                 }
               ]
-            },
-            "script": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "base_url",
-                "token",
-                "client"
-              ],
-              "properties": {
-                "base_url": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                },
-                "client": {
-                  "type": "string"
-                }
-              }
             }
           }
         }
       },
       {
         "name": "act",
-        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read. Called from a run_code program (json format), the step is recorded as scripted, under the session's latest note.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -662,7 +641,7 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) on sessions started with allow_reset:false. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read. Called from a run_code program (json format), the step is recorded as scripted, under the session's latest note.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1336,18 +1315,25 @@
         }
       },
       {
-        "name": "script_access",
-        "description": "Get a fresh token for scripting this session (invalidates the previous one).",
+        "name": "note",
+        "description": "Open a script run on a session: a note saying what your run_code program tries next and why, shown live to the user above the steps it takes. Call it before a program's first act and again whenever its plan changes.",
         "inputSchema": {
           "type": "object",
           "properties": {
             "session_id": {
               "type": "string",
               "pattern": "^s-[0-9a-f]{12}$"
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "description": "What the program tries and why, a sentence or two."
             }
           },
           "required": [
-            "session_id"
+            "session_id",
+            "note"
           ],
           "additionalProperties": false
         },
@@ -1356,31 +1342,15 @@
           "additionalProperties": false,
           "required": [
             "session_id",
-            "script"
+            "run"
           ],
           "properties": {
             "session_id": {
               "type": "string"
             },
-            "script": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "base_url",
-                "token",
-                "client"
-              ],
-              "properties": {
-                "base_url": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                },
-                "client": {
-                  "type": "string"
-                }
-              }
+            "run": {
+              "type": "integer",
+              "description": "The run this note opened; json-format steps on the session record it until the next note."
             }
           }
         }

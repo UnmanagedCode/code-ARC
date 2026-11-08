@@ -1,15 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
-import { captureLog, ok, refusal, ROOT, startApp, startGame } from './_helpers.mjs';
+import { captureLog, ok, refusal, startApp, startGame } from './_helpers.mjs';
 import { decodePng, rgbOf } from './_png.mjs';
 import { IMAGE_SPEC, renderBoard } from '../src/boardImage.js';
 import { MAX_LIVE_SESSIONS, REASONING_MAX_CHARS } from '../src/limits.js';
-
-const run = promisify(execFile);
 
 const A = { sessionId: 'agent-a', project: 'proj' };
 const B = { sessionId: 'agent-b', project: 'other' };
@@ -284,21 +280,6 @@ test('a failed image write never fails the action', async (t) => {
   assert.match(log.text(), /board image for s-/);
   const text = (await mcpText('observe', { session_id: sid, frame: 'image' })).text;
   assert.match(text, /No image: it could not be written \(error: .*not a real directory.*\)\. The action still happened\./);
-});
-
-test('server and client agree end to end on one session image', async (t) => {
-  const { mcp, app, env } = await startApp(t);
-  const sid = await startGame(mcp);
-  await mcp('act', { session_id: sid, action: 'ACTION6', x: 10, y: 20 });
-  const r = ok(await mcp('observe', { session_id: sid, frame: 'image' }));
-  const out = path.join(env.tmp, 'client.png');
-  const child = run('python3', ['-I', path.join(ROOT, 'tests', 'fixtures', 'png_driver.py'), path.join(ROOT, 'clients'), env.tmp], { timeout: 20000 });
-  child.child.stdin.end(JSON.stringify([{ rows: app.store.lastFrame(sid), scale: IMAGE_SPEC.scale.default, grid: IMAGE_SPEC.grid.default, out: 'client.png' }]));
-  assert.deepEqual(JSON.parse((await child).stdout), [out]);
-  const server = decodePng(await fs.readFile(r.frame.path));
-  const client = decodePng(await fs.readFile(out));
-  assert.deepEqual([client.width, client.height], [server.width, server.height]);
-  assert.ok(rgbOf(client).equals(rgbOf(server)));
 });
 
 // Pins: the text view says there is no image because no frame is stored.
