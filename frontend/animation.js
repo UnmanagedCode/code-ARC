@@ -155,6 +155,5 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
       pos = Math.max(0, Math.min(lastPos(), from + delta));
       onChange();
     },
-
   };
 }

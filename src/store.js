@@ -86,6 +86,8 @@ export async function ensureDir(dir) {
   await fs.chmod(dir, 0o700);
 }
 
+// The file's last line: null when the file is missing or empty, undefined when
+// it has content but no whole last line fits the tail windows (the caller scans).
 async function lastLine(file) {
   let fh;
   try {
@@ -109,12 +111,29 @@ async function lastLine(file) {
     };
     const first = await tail(TAIL_READ_BYTES);
     if (first.whole) return first.line;
-    // Still no whole line: report none rather than a fragment.
     const wide = await tail(Math.min(size, STEP_LINE_MAX_BYTES));
-    return wide.whole ? wide.line : null;
+    return wide.whole ? wide.line : undefined;
   } finally {
     await fh.close();
   }
+}
+
+// The last line of a step file that decodes, by reading the whole file: the
+// fallback for a last line longer than every tail window. Never a fragment.
+async function scanLastStep(file) {
+  const stream = createReadStream(file, { encoding: 'utf8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let last = null;
+  try {
+    for await (const line of rl) {
+      if (!line) continue;
+      try { last = decodeStep(line); } catch { /* a torn line */ }
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+  return last;
 }
 
 export function createStore({ dataDir, log = console }) {
@@ -160,15 +179,15 @@ export function createStore({ dataDir, log = console }) {
           await writeMeta(meta);
         }
         metas.set(id, meta);
-        const line = await lastLine(path.join(dirOf(id), 'steps.jsonl'));
-        if (line) {
-          try {
-            const step = decodeStep(line);
-            if (Array.isArray(step.frame)) lastFrames.set(id, step.frame);
-          } catch {
-            log.error(`[code-arc] session ${id}: last step line is malformed`);
-          }
+        const file = path.join(dirOf(id), 'steps.jsonl');
+        const line = await lastLine(file);
+        let step = null;
+        try {
+          step = line === undefined ? await scanLastStep(file) : line ? decodeStep(line) : null;
+        } catch {
+          log.error(`[code-arc] session ${id}: last step line is malformed`);
         }
+        if (step && Array.isArray(step.frame)) lastFrames.set(id, step.frame);
       }
     },
 

@@ -293,7 +293,7 @@ test('frames inside anim_z are separated by a blank line, so rows and frames nev
   assert.deepEqual((await store.readStep(SID, 0)).anim, [['11', '22'], ['33']]);
 });
 
-test('a last line over the wide window reads as no line: init decodes no fragment and logs it malformed', async (t) => {
+test('a last line longer than every tail window: init scans for it, restores lastFrame, and readStep serves it', async (t) => {
   const env = await freshEnv(t);
   const dir = path.join(env.dataDir, 'sessions', SID);
   await fs.mkdir(dir, { recursive: true });
@@ -301,7 +301,11 @@ test('a last line over the wide window reads as no line: init decodes no fragmen
   const ok0 = JSON.stringify({ n: 0, action: 'A', frame: gridRows(1) });
   const huge = JSON.stringify({ n: 1, action: 'B', frame: gridRows(2), pad: 'x'.repeat(700 * 1024) });
   await fs.writeFile(path.join(dir, 'steps.jsonl'), `${ok0}\n${huge}\n`);
-  const { store } = await storeAt(t, env);
-  assert.equal(store.lastFrame(SID), null);
-  assert.equal(await store.readStep(SID, 0).then((s) => s.n), 0, 'earlier lines still read by the scan');
+  const lines = [];
+  const store = createStore({ dataDir: env.dataDir, log: { error: (m) => lines.push(m) } });
+  await store.init();
+  assert.deepEqual(store.lastFrame(SID), gridRows(2), 'the newest step\'s frame, not the earlier one and not a fragment');
+  assert.deepEqual(lines, [], 'nothing malformed was logged');
+  assert.deepEqual((await store.readStep(SID, 1)).frame, gridRows(2));
+  assert.deepEqual((await store.readStep(SID, 0)).frame, gridRows(1));
 });

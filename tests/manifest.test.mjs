@@ -127,6 +127,14 @@ test('animation options: enum and default on act and observe; the paging options
   assert.equal(tools.act.properties.animation_step, undefined);
 });
 
+test('image_scale descriptions state the contact-sheet default and cap from src/board_image.json', () => {
+  for (const t of ['act', 'observe']) {
+    const d = tools[t].properties.image_scale.description;
+    assert.match(d, new RegExp(`default ${IMAGE_SPEC.sheet.scale_default}, capped at ${IMAGE_SPEC.sheet.scale_max}\\b`), t);
+    assert.match(d, new RegExp(`render at ${IMAGE_SPEC.sheet.scale_max}\\b`), t);
+  }
+});
+
 test('ANIMATION_FRAMES_MAX equals the sidecar engine value', async () => {
   const py = await fs.readFile(path.join(ROOT, 'sidecar', 'engine.py'), 'utf8');
   assert.equal(Number(/^ANIMATION_FRAMES_MAX = (\d+)$/m.exec(py)?.[1]), ANIMATION_FRAMES_MAX);

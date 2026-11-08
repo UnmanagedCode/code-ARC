@@ -162,12 +162,13 @@ test('onChange fires at most once for repeated show(null) and repeated show of t
 });
 
 test('two quick play() calls on one step fetch its frames once', async () => {
-  let release;
-  const { anim, fetched } = setup(() => new Promise((r) => { release = r; }));
+  const releases = [];
+  const { anim, fetched } = setup(() => new Promise((r) => { releases.push(r); }));
   anim.show({ n: 1, frame_count: 3 });
   const a = anim.play();
   const b = anim.play();
-  release(data([0, 1, 2]));
+  // Every fetch is released, so a regression fails on the count, not by hanging.
+  releases.forEach((r) => r(data([0, 1, 2])));
   await Promise.all([a, b]);
   assert.deepEqual(fetched, [1]);
 });

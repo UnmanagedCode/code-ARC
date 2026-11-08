@@ -49,7 +49,9 @@ const range = (a, b) => (a === b ? `${a}` : `${a}-${b}`);
 export function animationNotes(m) {
   const lines = [];
   if (m.omitted > 0) {
-    lines.push(m.stored === 1
+    lines.push(m.stored === 0
+      ? `No frames were recorded for this step (frame_count ${m.frame_count}).`
+      : m.stored === 1
       ? `Earlier frames were not recorded (${m.omitted} of ${m.frame_count} missing).`
       : `Frames ${range(m.stored - 1, m.frame_count - 2)} were not stored (actions over ${ANIMATION_FRAMES_MAX} frames keep the first ${ANIMATION_FRAMES_MAX - 1} and the last).`);
   }

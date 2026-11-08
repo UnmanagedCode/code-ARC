@@ -562,7 +562,7 @@
               "type": "integer",
               "minimum": 4,
               "maximum": 16,
-              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4."
+              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4, capped at 8 (larger values render at 8)."
             },
             "image_grid": {
               "type": "boolean",
@@ -1435,7 +1435,7 @@
               "type": "integer",
               "minimum": 4,
               "maximum": 16,
-              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4."
+              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4, capped at 8 (larger values render at 8)."
             },
             "image_grid": {
               "type": "boolean",
