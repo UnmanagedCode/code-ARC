@@ -1,7 +1,8 @@
-// Board image files of live sessions: <dataDir>/images/<sid>/step-<n>-<seq>.png.
-// `seq` counts a session's writes, so every image gets a path of its own and a
-// reader never sees a cached older copy. Only the newest file per session is
-// kept; a session's dir is removed when it ends, and all of images/ at start
+// Board image files of live sessions: <dataDir>/images/<sid>/step-<n>-<seq>.png,
+// and contact sheets of a step's animation as anim-<n>-<seq>.png. `seq` counts
+// a session's writes of both kinds, so every image gets a path of its own and a
+// reader never sees a cached older copy. Only the newest file of each kind per
+// session is kept (a sheet write never removes the board image); a session's dir is removed when it ends, and all of images/ at start
 // (no session survives a restart). Writes and prunes for one session run in
 // call order, and a write checks `isLive` when its turn comes: end() marks the
 // session ended before it queues the prune, so a write either lands before the
@@ -15,7 +16,7 @@
 import { constants as FS, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { writeFileAtomic } from './atomicFile.js';
-import { boardPng } from './boardImage.js';
+import { boardPng, sheetPng } from './boardImage.js';
 import { SESSION_ID_RE } from './limits.js';
 
 const notRealDir = (dir) => new Error(`board image: ${dir} is not a real directory (a symlink or another file is in its place)`);
@@ -49,8 +50,8 @@ export function createBoardImages({ dataDir, isLive }) {
   const imagesDir = path.join(dataDir, 'images');
   const chains = new Map();
   const seqs = new Map();
-  // id -> absolute path of the session's current image (the one file
-  // latest-only may remove).
+  // `${kind}:${id}` -> absolute path of the session's current image of that
+  // kind (the one file latest-only may remove).
   const latest = new Map();
 
   function chain(id, fn) {
@@ -69,6 +70,30 @@ export function createBoardImages({ dataDir, isLive }) {
     return dir;
   }
 
+  function writePng(id, kind, name, step, render) {
+    const dir = sessionDir(id);
+    if (!Number.isInteger(step) || step < 0) throw new Error(`board image: invalid step ${JSON.stringify(step)}`);
+    return chain(id, async () => {
+      if (!isLive(id)) return { ended: true };
+      const png = render();
+      const seq = (seqs.get(id) || 0) + 1;
+      seqs.set(id, seq);
+      const file = path.join(dir, `${name}-${step}-${seq}.png`);
+      if (path.dirname(file) !== dir) throw new Error(`board image: ${file} escapes ${dir}`);
+      await realDir(imagesDir);
+      await realDir(dir);
+      const [realImages, realSession] = await Promise.all([fs.realpath(imagesDir), fs.realpath(dir)]);
+      if (path.dirname(realSession) !== realImages) throw new Error(`board image: ${dir} resolves outside ${imagesDir}`);
+      await writeFileAtomic(file, png);
+      const prev = latest.get(`${kind}:${id}`);
+      latest.set(`${kind}:${id}`, file);
+      if (prev) {
+        await fs.unlink(prev).catch((e) => { if (e.code !== 'ENOENT') throw e; });
+      }
+      return { path: file };
+    });
+  }
+
   return {
     async init() {
       // rm never follows a symlink: a planted link is removed, its target kept.
@@ -80,36 +105,18 @@ export function createBoardImages({ dataDir, isLive }) {
     // {path} (absolute) of the written PNG, or {ended:true} when the session
     // was no longer live at its turn. Throws on a bad id, step or frame, and
     // on fs errors.
-    async write(id, step, rows, opts) {
-      const dir = sessionDir(id);
-      if (!Number.isInteger(step) || step < 0) throw new Error(`board image: invalid step ${JSON.stringify(step)}`);
-      return chain(id, async () => {
-        if (!isLive(id)) return { ended: true };
-        const png = boardPng(rows, opts);
-        const seq = (seqs.get(id) || 0) + 1;
-        seqs.set(id, seq);
-        const file = path.join(dir, `step-${step}-${seq}.png`);
-        if (path.dirname(file) !== dir) throw new Error(`board image: ${file} escapes ${dir}`);
-        await realDir(imagesDir);
-        await realDir(dir);
-        const [realImages, realSession] = await Promise.all([fs.realpath(imagesDir), fs.realpath(dir)]);
-        if (path.dirname(realSession) !== realImages) throw new Error(`board image: ${dir} resolves outside ${imagesDir}`);
-        await writeFileAtomic(file, png);
-        const prev = latest.get(id);
-        latest.set(id, file);
-        if (prev) {
-          await fs.unlink(prev).catch((e) => { if (e.code !== 'ENOENT') throw e; });
-        }
-        return { path: file };
-      });
-    },
+    write: async (id, step, rows, opts) => writePng(id, 'board', 'step', step, () => boardPng(rows, opts)),
+
+    // The same for a contact sheet of `frames` ([{index, rows}]) of `step`.
+    writeSheet: async (id, step, frames, opts) => writePng(id, 'sheet', 'anim', step, () => sheetPng(frames, opts)),
 
     // Removes the session's image dir (queued after its pending writes).
     async prune(id) {
       const dir = sessionDir(id);
       return chain(id, async () => {
         seqs.delete(id);
-        latest.delete(id);
+        latest.delete(`board:${id}`);
+        latest.delete(`sheet:${id}`);
         let st;
         try {
           st = await fs.lstat(imagesDir);

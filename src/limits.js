@@ -21,6 +21,12 @@ export const DETAIL_MAX = 1000;
 // Sessions per page of list_sessions' text view, newest first (the json view
 // lists every session in scope; `offset` pages the text).
 export const LIST_SESSIONS_TEXT_PAGE = 50;
+// Animation frames stored per step: the first ANIMATION_FRAMES_MAX - 1 and the
+// last (the toolkit allows far more per action; a sidecar reply line must stay
+// under SIDECAR_LINE_MAX). sidecar/engine.py mirrors it; tests pin them equal.
+export const ANIMATION_FRAMES_MAX = 64;
+// Animation frames returned per act/observe call, and tiles per contact sheet.
+export const ANIMATION_PAGE_MAX = 16;
 // Live viewer connections at once; past this an SSE request gets 503.
 export const SSE_MAX_CLIENTS = 32;
 // Bytes an SSE client may leave unsent while it is still behind from an

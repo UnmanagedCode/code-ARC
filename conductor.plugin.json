@@ -341,13 +341,177 @@
                   }
                 }
               ]
+            },
+            "animation": {
+              "description": "Present with animation:'all'. frame_count is the toolkit's count; stored of them are held (index = position in the action's animation, so a gap shows as an index jump); omitted = frame_count - stored. frames: page of at most 16, first full then diffs against the frame before; absent with frame:'image' (image is present instead).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "frame_count",
+                "stored",
+                "omitted",
+                "from",
+                "next_from",
+                "truncated"
+              ],
+              "properties": {
+                "step": {
+                  "type": "integer"
+                },
+                "frame_count": {
+                  "type": "number"
+                },
+                "stored": {
+                  "type": "integer"
+                },
+                "omitted": {
+                  "type": "integer"
+                },
+                "from": {
+                  "type": "integer"
+                },
+                "next_from": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "full"
+                          },
+                          "auto_full": {
+                            "type": "boolean"
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "changed_cells",
+                          "bbox",
+                          "changed_rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "diff"
+                          },
+                          "changed_cells": {
+                            "type": "integer"
+                          },
+                          "bbox": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "x0",
+                                  "y0",
+                                  "x1",
+                                  "y1"
+                                ],
+                                "properties": {
+                                  "x0": {
+                                    "type": "integer"
+                                  },
+                                  "y0": {
+                                    "type": "integer"
+                                  },
+                                  "x1": {
+                                    "type": "integer"
+                                  },
+                                  "y1": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "changed_rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "y",
+                                "row"
+                              ],
+                              "properties": {
+                                "y": {
+                                  "type": "integer"
+                                },
+                                "row": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              }
             }
           }
         }
       },
       {
         "name": "act",
-        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Take one action. ACTION6 needs x (column) and y (row), 0-63, origin top-left; other actions take no coordinates. frame defaults to 'diff': only changed rows. reasoning is shown live to the user and forwarded to the toolkit. frame 'image' writes a PNG of the board and gives its file path; open it with Read. animation 'all' also returns this action's animation frames (a multi-frame action shows frame_count > 1); frame still describes the last frame.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -398,11 +562,20 @@
               "type": "integer",
               "minimum": 4,
               "maximum": 16,
-              "description": "frame:'image' only: pixels per cell, default 8."
+              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4."
             },
             "image_grid": {
               "type": "boolean",
-              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true."
+              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true. A contact sheet's tiles use it too."
+            },
+            "animation": {
+              "type": "string",
+              "enum": [
+                "last",
+                "all"
+              ],
+              "default": "last",
+              "description": "'all' also returns the action's animation frames: the first full, each later one a diff against the frame before it, at most 16 per call (truncated and next_from say when more are left); with frame:'image' a contact-sheet PNG of numbered tiles instead. Default 'last': only the last frame, as before."
             }
           },
           "required": [
@@ -637,6 +810,170 @@
                   }
                 }
               ]
+            },
+            "animation": {
+              "description": "Present with animation:'all'. frame_count is the toolkit's count; stored of them are held (index = position in the action's animation, so a gap shows as an index jump); omitted = frame_count - stored. frames: page of at most 16, first full then diffs against the frame before; absent with frame:'image' (image is present instead).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "frame_count",
+                "stored",
+                "omitted",
+                "from",
+                "next_from",
+                "truncated"
+              ],
+              "properties": {
+                "step": {
+                  "type": "integer"
+                },
+                "frame_count": {
+                  "type": "number"
+                },
+                "stored": {
+                  "type": "integer"
+                },
+                "omitted": {
+                  "type": "integer"
+                },
+                "from": {
+                  "type": "integer"
+                },
+                "next_from": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "full"
+                          },
+                          "auto_full": {
+                            "type": "boolean"
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "changed_cells",
+                          "bbox",
+                          "changed_rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "diff"
+                          },
+                          "changed_cells": {
+                            "type": "integer"
+                          },
+                          "bbox": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "x0",
+                                  "y0",
+                                  "x1",
+                                  "y1"
+                                ],
+                                "properties": {
+                                  "x0": {
+                                    "type": "integer"
+                                  },
+                                  "y0": {
+                                    "type": "integer"
+                                  },
+                                  "x1": {
+                                    "type": "integer"
+                                  },
+                                  "y1": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "changed_rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "y",
+                                "row"
+                              ],
+                              "properties": {
+                                "y": {
+                                  "type": "integer"
+                                },
+                                "row": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -907,13 +1244,177 @@
                   }
                 }
               ]
+            },
+            "animation": {
+              "description": "Present with animation:'all'. frame_count is the toolkit's count; stored of them are held (index = position in the action's animation, so a gap shows as an index jump); omitted = frame_count - stored. frames: page of at most 16, first full then diffs against the frame before; absent with frame:'image' (image is present instead).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "frame_count",
+                "stored",
+                "omitted",
+                "from",
+                "next_from",
+                "truncated"
+              ],
+              "properties": {
+                "step": {
+                  "type": "integer"
+                },
+                "frame_count": {
+                  "type": "number"
+                },
+                "stored": {
+                  "type": "integer"
+                },
+                "omitted": {
+                  "type": "integer"
+                },
+                "from": {
+                  "type": "integer"
+                },
+                "next_from": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "full"
+                          },
+                          "auto_full": {
+                            "type": "boolean"
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "changed_cells",
+                          "bbox",
+                          "changed_rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "diff"
+                          },
+                          "changed_cells": {
+                            "type": "integer"
+                          },
+                          "bbox": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "x0",
+                                  "y0",
+                                  "x1",
+                                  "y1"
+                                ],
+                                "properties": {
+                                  "x0": {
+                                    "type": "integer"
+                                  },
+                                  "y0": {
+                                    "type": "integer"
+                                  },
+                                  "x1": {
+                                    "type": "integer"
+                                  },
+                                  "y1": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "changed_rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "y",
+                                "row"
+                              ],
+                              "properties": {
+                                "y": {
+                                  "type": "integer"
+                                },
+                                "row": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              }
             }
           }
         }
       },
       {
         "name": "observe",
-        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Re-read a session's latest state and frame without acting. frame defaults to 'full'. frame 'image' writes a PNG of the board and gives its file path; open it with Read. animation 'all' returns the stored animation of animation_step (default the latest step), without acting.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -934,11 +1435,31 @@
               "type": "integer",
               "minimum": 4,
               "maximum": 16,
-              "description": "frame:'image' only: pixels per cell, default 8."
+              "description": "frame:'image' only: pixels per cell, default 8. A contact sheet (animation:'all') uses it too, default 4."
             },
             "image_grid": {
               "type": "boolean",
-              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true."
+              "description": "frame:'image' only: lines and labelled ticks every 8 cells, default true. A contact sheet's tiles use it too."
+            },
+            "animation": {
+              "type": "string",
+              "enum": [
+                "last",
+                "all"
+              ],
+              "default": "last",
+              "description": "'all' also returns the action's animation frames: the first full, each later one a diff against the frame before it, at most 16 per call (truncated and next_from say when more are left); with frame:'image' a contact-sheet PNG of numbered tiles instead. Default 'last': only the last frame, as before."
+            },
+            "animation_step": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 20000,
+              "description": "animation:'all' only: the step whose animation to return (the step field of the act result that produced it); default the latest step."
+            },
+            "animation_from": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "animation:'all' only: first frame index to return, from a previous result's next_from; default 0."
             }
           },
           "required": [
@@ -1172,6 +1693,170 @@
                   }
                 }
               ]
+            },
+            "animation": {
+              "description": "Present with animation:'all'. frame_count is the toolkit's count; stored of them are held (index = position in the action's animation, so a gap shows as an index jump); omitted = frame_count - stored. frames: page of at most 16, first full then diffs against the frame before; absent with frame:'image' (image is present instead).",
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "step",
+                "frame_count",
+                "stored",
+                "omitted",
+                "from",
+                "next_from",
+                "truncated"
+              ],
+              "properties": {
+                "step": {
+                  "type": "integer"
+                },
+                "frame_count": {
+                  "type": "number"
+                },
+                "stored": {
+                  "type": "integer"
+                },
+                "omitted": {
+                  "type": "integer"
+                },
+                "from": {
+                  "type": "integer"
+                },
+                "next_from": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "frames": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "full"
+                          },
+                          "auto_full": {
+                            "type": "boolean"
+                          },
+                          "rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "index",
+                          "mode",
+                          "changed_cells",
+                          "bbox",
+                          "changed_rows"
+                        ],
+                        "properties": {
+                          "index": {
+                            "type": "integer"
+                          },
+                          "mode": {
+                            "const": "diff"
+                          },
+                          "changed_cells": {
+                            "type": "integer"
+                          },
+                          "bbox": {
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "x0",
+                                  "y0",
+                                  "x1",
+                                  "y1"
+                                ],
+                                "properties": {
+                                  "x0": {
+                                    "type": "integer"
+                                  },
+                                  "y0": {
+                                    "type": "integer"
+                                  },
+                                  "x1": {
+                                    "type": "integer"
+                                  },
+                                  "y1": {
+                                    "type": "integer"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "changed_rows": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "additionalProperties": false,
+                              "required": [
+                                "y",
+                                "row"
+                              ],
+                              "properties": {
+                                "y": {
+                                  "type": "integer"
+                                },
+                                "row": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "image": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "error": {
+                      "type": "string"
+                    },
+                    "unavailable": {
+                      "type": "string",
+                      "enum": [
+                        "no_frame",
+                        "session_ended"
+                      ]
+                    }
+                  }
+                }
+              }
             }
           }
         }

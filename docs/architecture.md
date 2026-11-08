@@ -31,8 +31,9 @@ run_code program ─cc REST alias (json)─▶ POST /api/mcp (same endpoint; jso
 | `src/observation.js` | `observationFields`: the observation fields every observation-returning tool shares (`src/mcp.js` adds title and frame; json drops `ok`) |
 | `src/frames.js` | Frame text (full / diff) and the json frame data (`diffRows`, `frameData`) |
 | `src/png.js` | `encodePng`: minimal PNG encoder (RGB, filter 0, one IDAT, table CRC); knows nothing about ARC |
-| `src/boardImage.js` | `renderBoard` / `boardPng`: frame rows → board image pixels by the rules in [protocol.md](protocol.md) → Board image; `IMAGE_SPEC` (the parsed spec, validated at load) |
-| `src/boardImages.js` | `createBoardImages`: board image files of live sessions (`write`, `prune`, `init`); per-session serialised, latest only, path-checked |
+| `src/boardImage.js` | `renderBoard` / `boardPng`: frame rows → board image pixels by the rules in [protocol.md](protocol.md) → Board image; `renderSheet` / `sheetPng`: the animation contact sheet; `IMAGE_SPEC` (the parsed spec, validated at load) |
+| `src/animation.js` | Pure animation views of a step (`stepFrames`, `animationView`, `animationData`, `animationText`, `animationNotes`): the one implementation behind `act`, `observe` and the frames route |
+| `src/boardImages.js` | `createBoardImages`: board image and contact-sheet files of live sessions (`write`, `writeSheet`, `prune`, `init`); per-session serialised, newest only per kind, path-checked |
 | `src/board_image.json` | The board image spec (palette, scale bounds, grid geometry, glyphs): read by `src/boardImage.js` |
 | `src/online.js` | ONLINE limits, rate limiter, scorecard URL |
 | `src/store.js` | The only session writer (board image files aside: `src/boardImages.js`); `src/keyStore.js` the key; `src/atomicFile.js` helpers |
@@ -41,7 +42,7 @@ run_code program ─cc REST alias (json)─▶ POST /api/mcp (same endpoint; jso
 | `sidecar/engine.py` | Toolkit adapter: one `Arcade` per mode (plus an OFFLINE arcade over a bundle's games), the environments, failure classification, reasoning byte check |
 | `sidecar/bundle_games.py` | Export helper (never run by the backend): downloads every listed game into a bundle's `games/` |
 | `scripts/bundle.mjs` | Bundle CLI: `export`, `import` |
-| `frontend/` | Vanilla ES modules, no build: `app.js` (state, routing, SSE), `playback.js` (`createPlayback`: the shown step and Live/Replay mode, injected clock, no DOM), `grid.js`, `sessions.js`, `steplog.js`, `runs.js` (pure script-run helpers), `settings.js`, `palette.js`, `safeHref.js`, `api.js` |
+| `frontend/` | Vanilla ES modules, no build: `app.js` (state, routing, SSE), `playback.js` (`createPlayback`: the shown step and Live/Replay mode, injected clock, no DOM), `animation.js` (`createAnimation`: the shown step's frames, fetched on demand from the frames route; play/step, injected clock and fetch, no DOM), `grid.js`, `sessions.js`, `steplog.js`, `runs.js` (pure script-run helpers), `settings.js`, `palette.js`, `safeHref.js`, `api.js` |
 | `claude/` | Claude Code plugin with the `play-arc` skill |
 
 ## Lifecycle
@@ -86,15 +87,19 @@ The directories and files the plugin itself creates are 0700 / 0600: the data di
 ```
 secrets.json                 {arcApiKey}
 sessions/<sid>/meta.json     session meta (atomic writes)
-sessions/<sid>/steps.jsonl   one step per line, append-only; frames as `frame_z`
+sessions/<sid>/steps.jsonl   one step per line, append-only; frames as `frame_z`, an animation's leading frames as `anim_z`
 sessions/<sid>/notes.jsonl   one script run note per line, append-only
 images/<sid>/step-<n>-<seq>.png  newest board image of a live session (0600); removed at session end, all of images/ at start
+images/<sid>/anim-<n>-<seq>.png  newest animation contact sheet (same lifecycle; the two kinds are kept independently)
 toolkit/                     sidecar cwd: the toolkit's environment_files/ (downloaded games), .env lookup
 bundle/                      the imported offline bundle (bundle.md); read-only to the toolkit
 ```
 
 - The latest frame per session is cached in memory and rebuilt on start from the tail of `steps.jsonl` (`TAIL_READ_BYTES` in `src/store.js`).
 - A step line stores its frame as `frame_z` = base64 of `deflateRawSync(rows.join('\n'))`, stateless per line (on a recorded 69-step game, about 480 B against 4.2 KB of plain rows per frame); `decodeStep` inflates it, and lines with a plain `frame` still read. `n` is the first key of every line, so `readSteps` skips earlier lines by the `{"n":<n>,` prefix without parsing them.
+- `anim_z` holds the frames before the last of a multi-frame action: one raw-deflate stream over every frame's rows joined by `\n`, frames separated by a blank line (rows are never empty), so near-identical consecutive frames compress against each other. `encodeStep` writes it from the step's `anim` (never persisted as such); `decodeStep` always strips it, so pages, SSE and `init` never inflate it, and only `store.readStep(id, n)` returns it as `anim`. `anim` is absent for a line without `anim_z` (every older line: one stored frame) and `null` for one that is corrupt, over the inflate bound (`(ANIMATION_FRAMES_MAX - 1)` frames' text) or holds an invalid frame; the last frame is unaffected either way.
+- `readStep` tries the newest line first (an agent usually pulls the animation right after `act`), else scans like `readSteps`. `lastLine` re-reads `STEP_LINE_MAX_BYTES` from the tail when the `TAIL_READ_BYTES` window holds no complete line, so a long animated last line still restores `lastFrame` after a restart.
+- Size, measured on the gated real run (`test_list_make_step_close` and a throwaway probe stepping random actions in every listed game, 40 steps each): the largest `frame_count` was 42 (`sb26-*`), a sidecar reply line of about 180 KB, and its stored step line about 3 KB; a single-frame step line about 0.3 KB. The cap (`ANIMATION_FRAMES_MAX`) is a safety bound well above that: the toolkit allows more frames per action than one sidecar line (`SIDECAR_LINE_MAX`) can carry.
 - `SESSION_STEPS_MAX` bounds a session's `steps.jsonl`; there is no retention across sessions.
 - Reading back, `frame_z` is inflated with `maxOutputLength` at one frame's text; a frame that fails to inflate, overflows the bound, or isn't 1–64 rows of 1–64 hex digits reads as `frame: null` (a tampered or corrupt line never crashes a read).
 
@@ -108,5 +113,6 @@ bundle/                      the imported offline bundle (bundle.md); read-only 
 - Offline bundle: `tests/_bundle.mjs` builds bundle dirs with real hashes, archives (also malformed ones) and a refusing fetch spy. The fake toolkit logs every request it would send to `<data>/toolkit/net.jsonl` (`{path, mode, ok}`) and fails them all while `<data>/toolkit/fake-net-down` exists; its OFFLINE mode scans a games dir and records `load_source`. `tests/bundle-boot.test.mjs` boots whole apps on that switch.
 - Board images: `tests/boardImage.test.mjs` decodes with the independent test decoder `tests/_png.mjs`; `tests/boardImages.test.mjs` covers the file lifecycle. Sample image for a visual check: `node harness/board-image.mjs [--scale N] [--no-grid]` boots the backend in-process on a fresh temp data dir and the fake toolkit, plays two moves, prints `{path, data_dir}` and leaves the session (and its image) in place; delete the printed data dir afterwards.
 - Real toolkit smoke test (network, bootstrapped `.venv`): `RUN_REAL_ARC=1 python3 -m unittest sidecar.tests.test_real_toolkit`. It also checks `frontend/palette.js` and the `src/board_image.json` palette against `arc_agi.rendering.COLOR_MAP`, and that an OFFLINE arcade plays a downloaded game with every socket call guarded (`sidecar/tests/netguard.py`, test-only).
+- Animations: `tests/animation.test.mjs` (pure views), `tests/animation-mcp.test.mjs` (end to end on `fake-maze` two-frame moves and `fake-anim`'s 70-frame `ACTION1`; the default-output golden `tests/fixtures/act-default.json`, produced by `tests/_golden.mjs`), `tests/persistence.test.mjs` (`anim_z`, `readStep`, tail re-read), `tests/animation-viewer.test.mjs` (`createAnimation` on a fake clock and fetch).
 - Viewer pacing and replay: `tests/playback.test.mjs` drives `createPlayback` on a fake clock (burst pacing, jump to latest, trim, play/pause/seek, mode switch, interval change). `tests/http.test.mjs` pins that an ended session's steps stay readable.
-- Visual check: `node harness/playwright/screenshot.mjs` (needs `CC_PROJECTS_ROOT` and the code-playwright plugin) boots a sandboxed server on the fake toolkit, drives the viewer and writes PNGs to `harness/playwright/out/` (including `paced-behind.png` and `replay.png`). Its scripted scenario boots `harness/playwright/server.mjs`, which is `server.js` with a raised step rate for a 300-step burst (json-format calls through `api/mcp`). `node harness/playwright/bundle.mjs` boots on a fixture bundle (`CODE_ARC_BUNDLE`) and on a tampered one: `bundle-ready.png`, `bundle-rejected.png`.
+- Visual check: `node harness/playwright/screenshot.mjs` (needs `CC_PROJECTS_ROOT` and the code-playwright plugin) boots a sandboxed server on the fake toolkit, drives the viewer and writes PNGs to `harness/playwright/out/` (including `paced-behind.png`, `replay.png` and the `anim-*.png` animation scenarios). Its scripted scenario boots `harness/playwright/server.mjs`, which is `server.js` with a raised step rate for a 300-step burst (json-format calls through `api/mcp`). `node harness/playwright/bundle.mjs` boots on a fixture bundle (`CODE_ARC_BUNDLE`) and on a tampered one: `bundle-ready.png`, `bundle-rejected.png`.

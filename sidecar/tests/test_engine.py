@@ -1,9 +1,12 @@
+import contextlib
+import io
 import logging
 import unittest
 
 from sidecar.tests._support import TempCwd, calls, make_engine
 
 from engine import (  # noqa: E402 - path set up by _support
+    ANIMATION_FRAMES_MAX,
     Redactor,
     RedactFilter,
     Refusal,
@@ -40,6 +43,37 @@ class NormalizeTest(unittest.TestCase):
         self.assertEqual(o["frame_count"], 2)
         self.assertEqual(o["available_actions"], [1, 6])
         self.assertEqual((o["levels_completed"], o["win_levels"], o["state"]), (1, 3, "NOT_FINISHED"))
+
+    def test_leading_frames_are_the_animation(self):
+        frames = [[[i, i]] for i in range(3)]
+        o = normalize_obs(Obs(frames))
+        self.assertEqual(o["frame"], ["22"])
+        self.assertEqual(o["anim"], [["00"], ["11"]])
+        self.assertEqual(o["frame_count"], 3)
+
+    def test_animation_past_the_cap_keeps_the_first_frames_and_the_true_count(self):
+        frames = [[[i % 16]] for i in range(70)]
+        o = normalize_obs(Obs(frames))
+        self.assertEqual(len(o["anim"]), ANIMATION_FRAMES_MAX - 1)
+        self.assertEqual(o["anim"], [[f"{i % 16:x}"] for i in range(ANIMATION_FRAMES_MAX - 1)])
+        self.assertEqual(o["frame"], [f"{69 % 16:x}"])
+        self.assertEqual(o["frame_count"], 70)
+
+    def test_exactly_the_cap_keeps_every_leading_frame(self):
+        o = normalize_obs(Obs([[[1]]] * ANIMATION_FRAMES_MAX))
+        self.assertEqual(len(o["anim"]), ANIMATION_FRAMES_MAX - 1)
+
+    def test_invalid_leading_frame_drops_the_animation_without_refusing(self):
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            o = normalize_obs(Obs([[[99]], [[1, 2], [3]], [[7]]]))
+        self.assertEqual(o["anim"], [])
+        self.assertEqual(o["frame"], ["7"])
+        self.assertEqual(o["frame_count"], 3)
+        self.assertIn("dropping the animation", err.getvalue())
+
+    def test_single_frame_has_no_animation(self):
+        self.assertEqual(normalize_obs(Obs([[[1]]]))["anim"], [])
+        self.assertEqual(normalize_obs(Obs([]))["anim"], [])
 
     def test_empty_frame_is_null(self):
         o = normalize_obs(Obs([]))
@@ -93,6 +127,19 @@ class EngineOpsTest(unittest.TestCase):
         self.assertEqual(len(cards), 2)
         self.assertNotEqual(a["scorecard_id"], b["scorecard_id"])
         self.assertEqual([c["tags"] for c in calls() if c["op"] == "create_scorecard"][0], ["code-arc"])
+
+    def test_a_maze_move_carries_its_leading_frame(self):
+        self.engine.open(SID, "fake-maze", False)
+        o = self.engine.step(SID, "ACTION4")["obs"]
+        self.assertEqual(o["frame_count"], 2)
+        self.assertEqual(len(o["anim"]), 1)
+        self.assertNotEqual(o["anim"][0], o["frame"])
+
+    def test_the_fake_anim_game_exceeds_the_cap(self):
+        self.engine.open(SID, "fake-anim", False)
+        o = self.engine.step(SID, "ACTION1")["obs"]
+        self.assertEqual(o["frame_count"], 70)
+        self.assertEqual(len(o["anim"]), ANIMATION_FRAMES_MAX - 1)
 
     def test_reasoning_is_wrapped_as_text(self):
         self.engine.open(SID, "fake-maze", False)

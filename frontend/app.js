@@ -1,5 +1,6 @@
 // The viewer: session list, frame, replay scrubber, action log and reasoning,
 // kept live over SSE. Route state (?session=&step=) lives in the query string.
+import { createAnimation } from './animation.js';
 import { getJson, subscribe } from './api.js';
 import { createGrid } from './grid.js';
 import { hasRun, mergeNotes, noteFor, sourceOf } from './runs.js';
@@ -37,6 +38,14 @@ const state = {
 // Owns the shown step and the Live/Replay mode; the render is rAF-coalesced.
 const playback = createPlayback({
   clock: { now: () => performance.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
+  onChange: () => scheduleRender(),
+});
+
+// Replays the shown step's animation frames; fetched on demand, so a step
+// without one costs nothing. Its changes render through the same coalescer.
+const anim = createAnimation({
+  clock: { setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
+  fetchFrames: (n) => getJson(`api/sessions/${encodeURIComponent(state.selected)}/steps/${n}/frames`),
   onChange: () => scheduleRender(),
 });
 
@@ -135,9 +144,23 @@ function renderControls() {
   $('behind').textContent = `${behind} ${behind === 1 ? 'step' : 'steps'} behind`;
 }
 
+function renderAnim() {
+  const box = $('anim');
+  box.hidden = !anim.available;
+  if (box.hidden) return;
+  const play = $('anim-play');
+  const text = anim.playing ? 'Pause animation' : anim.played ? 'Replay animation' : 'Play animation';
+  play.textContent = text;
+  play.setAttribute('aria-label', text);
+  $('anim-label').textContent = anim.status === 'error' ? 'frames unavailable' : anim.status === 'loading' ? 'loading…' : anim.label;
+  $('anim-note').textContent = anim.note;
+}
+
 function renderStep() {
   const step = state.steps[playback.cursor];
-  grid.draw(step ? step.frame : null);
+  anim.show(step || null);
+  grid.draw(anim.rows() ?? (step ? step.frame : null));
+  renderAnim();
   renderControls();
   $('scrub-label').textContent = step ? `step ${step.n} of ${state.steps.at(-1).n}` : '';
   if (step) {
@@ -227,6 +250,7 @@ async function select(id, wantStep = null) {
   state.steps = [];
   state.notes = [];
   playback.dispose();
+  anim.reset();
   playback.load(0, -1, 'live');
   const token = ++state.loadToken;
   startLoading();
@@ -363,6 +387,12 @@ $('scrub').addEventListener('input', (e) => playback.seek(Number(e.target.value)
 $('mode-live').addEventListener('click', () => playback.setMode('live'));
 $('mode-replay').addEventListener('click', () => playback.setMode('replay'));
 $('play').addEventListener('click', () => (playback.playing ? playback.pause() : playback.play()));
+// An animation control lands in a paused Replay on the shown step first, so
+// Live cannot move the step mid-animation.
+const animControl = (fn) => () => { playback.seek(playback.cursor); fn(); };
+$('anim-play').addEventListener('click', animControl(() => (anim.playing ? anim.pause() : anim.play())));
+$('anim-prev').addEventListener('click', animControl(() => anim.stepBy(-1)));
+$('anim-next').addEventListener('click', animControl(() => anim.stepBy(1)));
 $('latest').addEventListener('click', () => playback.jumpToLatest());
 $('interval').addEventListener('change', (e) => playback.setIntervalMs(Number(e.target.value)));
 for (const ms of INTERVALS_MS) {

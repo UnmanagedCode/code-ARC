@@ -6,10 +6,13 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from sidecar.tests._support import SIDECAR
+
+from engine import ANIMATION_FRAMES_MAX  # noqa: E402 - path set up by _support
 
 ROOT = os.path.dirname(SIDECAR)
 VENV_PY = os.path.join(ROOT, ".venv", "bin", "python")
@@ -56,6 +59,30 @@ class RealToolkitTest(unittest.TestCase):
                     args.update(x=32, y=32)
                 r = call({"id": 4, "op": "step", "args": args})
                 self.assertTrue(r["ok"], r)
+                # Every available action a few times: the animation frames the
+                # toolkit returns are 64-row hex frames, capped as the engine says.
+                largest = 0
+                req_id = 10
+                for number in obs["available_actions"]:
+                    if number == 0:
+                        continue
+                    for _ in range(3):
+                        act = "ACTION%d" % number
+                        args = {"session_id": sid, "action": act}
+                        if act == "ACTION6":
+                            args.update(x=32, y=32)
+                        req_id += 1
+                        r = call({"id": req_id, "op": "step", "args": args})
+                        self.assertTrue(r["ok"], r)
+                        o = r["result"]["obs"]
+                        largest = max(largest, o["frame_count"])
+                        if o["frame"] is None:
+                            continue
+                        self.assertEqual(len(o["anim"]), min(o["frame_count"], ANIMATION_FRAMES_MAX) - 1)
+                        for f in o["anim"]:
+                            self.assertEqual(len(f), 64)
+                            self.assertTrue(all(re.fullmatch(r"[0-9a-f]{64}", row) for row in f))
+                sys.stderr.write("real toolkit: largest frame_count seen %d\n" % largest)
                 r = call({"id": 5, "op": "close", "args": {"session_id": sid}})
                 self.assertTrue(r["ok"], r)
                 self.assertIn("score", r["result"]["scorecard"])

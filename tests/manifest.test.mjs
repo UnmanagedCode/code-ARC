@@ -6,7 +6,7 @@ import { ROOT } from './_helpers.mjs';
 import { IMAGE_SPEC } from '../src/boardImage.js';
 import { createMcp } from '../src/mcp.js';
 import { checkSchema } from './_jsonSchemaSubset.mjs';
-import { ACTIONS, COORD_MAX, DEADLINES, GAME_ID_RE, NOTE_MAX_CHARS, REASONING_MAX_CHARS, SESSION_ID_RE } from '../src/limits.js';
+import { ACTIONS, ANIMATION_FRAMES_MAX, ANIMATION_PAGE_MAX, COORD_MAX, DEADLINES, GAME_ID_RE, NOTE_MAX_CHARS, REASONING_MAX_CHARS, SESSION_ID_RE, SESSION_STEPS_MAX } from '../src/limits.js';
 
 const manifest = JSON.parse(await fs.readFile(path.join(ROOT, 'conductor.plugin.json'), 'utf8'));
 const tools = Object.fromEntries(manifest.mcp.tools.map((t) => [t.name, t.inputSchema]));
@@ -107,4 +107,27 @@ test('claudePlugin points at a Claude Code plugin with the play-arc skill', asyn
   assert.equal(plugin.name, 'code-arc');
   const skill = await fs.readFile(path.join(dir, 'skills', 'play-arc', 'SKILL.md'), 'utf8');
   assert.match(skill, /^---\nname: play-arc\ndescription: .+\n---\n/);
+});
+
+test('animation options: enum and default on act and observe; the paging options carry no schema default', () => {
+  for (const t of ['act', 'observe']) {
+    const a = tools[t].properties.animation;
+    assert.deepEqual(a.enum, ['last', 'all'], t);
+    assert.equal(a.default, 'last', t);
+    assert.match(a.description, new RegExp(`at most ${ANIMATION_PAGE_MAX} per call`), t);
+  }
+  assert.equal(tools.reset.properties.animation, undefined);
+  for (const p of ['animation_step', 'animation_from']) {
+    assert.equal(tools.observe.properties[p].type, 'integer', p);
+    assert.equal(tools.observe.properties[p].minimum, 0, p);
+    // validate() fills schema defaults, which would hide an option given without animation:'all'.
+    assert.equal(tools.observe.properties[p].default, undefined, p);
+  }
+  assert.equal(tools.observe.properties.animation_step.maximum, SESSION_STEPS_MAX);
+  assert.equal(tools.act.properties.animation_step, undefined);
+});
+
+test('ANIMATION_FRAMES_MAX equals the sidecar engine value', async () => {
+  const py = await fs.readFile(path.join(ROOT, 'sidecar', 'engine.py'), 'utf8');
+  assert.equal(Number(/^ANIMATION_FRAMES_MAX = (\d+)$/m.exec(py)?.[1]), ANIMATION_FRAMES_MAX);
 });

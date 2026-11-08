@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { decodePng, rgbOf } from './_png.mjs';
 import { encodePng } from '../src/png.js';
-import { boardPng, IMAGE_SPEC, renderBoard } from '../src/boardImage.js';
+import { boardPng, IMAGE_SPEC, renderBoard, renderSheet, sheetPng } from '../src/boardImage.js';
 import { COLOR_MAP } from '../frontend/palette.js';
 
 const hexRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
@@ -171,4 +171,60 @@ test('boardPng decodes to renderBoard', () => {
   const want = renderBoard(ODD, opts);
   assert.deepEqual([img.width, img.height], [want.width, want.height]);
   assert.deepEqual(rgbOf(img), want.rgb);
+});
+
+// --- contact sheet (renderSheet) -------------------------------------------
+
+const SHEET = IMAGE_SPEC.sheet;
+const tiles = (n, rows = ODD) => Array.from({ length: n }, (_, i) => ({ index: i * 3, rows: rows.map((r) => r.replace(/./g, (c) => ((parseInt(c, 16) + i) % 16).toString(16))) }));
+const SHEET_OPTS = { scale: SHEET.scale_default, grid: true };
+
+test('sheet size: tiles in rows of sheet.columns with sheet.gap around and between them', () => {
+  const tile = renderBoard(ODD, SHEET_OPTS);
+  const strip = IMAGE_SPEC.grid.glyphs['0'].length * IMAGE_SPEC.grid.font_scale + 2 * IMAGE_SPEC.grid.label_offset;
+  for (const [n, cols, rowsN] of [[1, 1, 1], [4, 4, 1], [5, 4, 2], [16, 4, 4]]) {
+    const img = renderSheet(tiles(n), SHEET_OPTS);
+    assert.equal(img.width, SHEET.gap + cols * (tile.width + SHEET.gap), `${n} tiles wide`);
+    assert.equal(img.height, SHEET.gap + rowsN * (strip + tile.height + SHEET.gap), `${n} tiles high`);
+    assert.equal(img.rgb.length, img.width * img.height * 3);
+  }
+});
+
+test('each sheet tile region equals the board render at its offset', () => {
+  const ts = tiles(5);
+  const img = renderSheet(ts, SHEET_OPTS);
+  const strip = IMAGE_SPEC.grid.glyphs['0'].length * IMAGE_SPEC.grid.font_scale + 2 * IMAGE_SPEC.grid.label_offset;
+  ts.forEach((t, i) => {
+    const board = renderBoard(t.rows, SHEET_OPTS);
+    const ox = SHEET.gap + (i % SHEET.columns) * (board.width + SHEET.gap);
+    const oy = SHEET.gap + Math.floor(i / SHEET.columns) * (strip + board.height + SHEET.gap) + strip;
+    for (let y = 0; y < board.height; y++) {
+      const from = (y * board.width) * 3;
+      const at = ((oy + y) * img.width + ox) * 3;
+      assert.ok(board.rgb.subarray(from, from + board.width * 3).equals(img.rgb.subarray(at, at + board.width * 3)), `tile ${i} row ${y}`);
+    }
+  });
+});
+
+test('sheet tiles are labelled: the strip above a tile holds label pixels, the gap holds none', () => {
+  const img = renderSheet(tiles(2), SHEET_OPTS);
+  const count = (x0, y0, x1, y1) => {
+    let n = 0;
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) if (pxOf(img, x, y).join() === LABEL_RGB.join()) n++;
+    return n;
+  };
+  assert.ok(count(SHEET.gap, SHEET.gap, SHEET.gap + 30, SHEET.gap + 10) > 0, 'the first tile has a label');
+  assert.equal(count(0, 0, img.width, SHEET.gap), 0, 'the top gap is clear');
+});
+
+test('sheets of mixed tile shapes sit top-left in cells of the largest tile; the PNG decodes to the same size', () => {
+  const img = renderSheet([{ index: 0, rows: ['00', '00'] }, { index: 1, rows: ODD }], SHEET_OPTS);
+  const big = renderBoard(ODD, SHEET_OPTS);
+  assert.equal(img.width, SHEET.gap + 2 * (big.width + SHEET.gap));
+  const png = decodePng(sheetPng(tiles(3), SHEET_OPTS));
+  assert.equal(png.width, renderSheet(tiles(3), SHEET_OPTS).width);
+});
+
+test('a sheet needs at least one frame', () => {
+  assert.throws(() => renderSheet([], SHEET_OPTS), /at least one frame/);
 });

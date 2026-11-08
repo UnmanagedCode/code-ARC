@@ -22,9 +22,9 @@ The tables below give each tool's json `structured` fields; the text view of eac
 |---|---|---|
 | `list_games` | — | `{games:[{game_id, title, tags, downloaded, source}], web_unavailable?}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; `web_unavailable: {code, detail}` is present when, with a bundle, the web game list failed or is still loading (the text view says only the bundle's games are listed); a failed game-list fetch without a bundle is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
 | `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `false` = one run: every `reset` is refused `RESET_DISABLED`; `true` allows resets) | observation (first frame full) |
-| `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)) | observation |
+| `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)), `animation` (`last` default, `all`; [Animation](#animation)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
-| `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid` | observation from the stored last step; no toolkit call |
+| `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid`, `animation` (`last` default, `all`), `animation_step` (integer, `0`–`SESSION_STEPS_MAX`, default the latest step), `animation_from` (integer ≥ 0, default 0); the last two apply to `animation:"all"` only | observation from the stored last step; no toolkit call; with `animation:"all"` also the stored animation of `animation_step` ([Animation](#animation)) |
 | `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
 | `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry always carries `allow_reset` (boolean). json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
 | `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
@@ -50,10 +50,11 @@ json: `structured` is the object below. text: the same data as prose: a header l
 | `levels_completed`, `win_levels` | progress |
 | `available_actions` | e.g. `["ACTION1","ACTION6"]`; on an `allow_reset:false` session never `RESET`, and `[]` in `WIN`/`GAME_OVER` |
 | `step` | `0` = start; increments per `act`/`reset` |
-| `frame_count` | frames the action produced (only the last is shown) |
+| `frame_count` | frames the action produced; `frame` is the last one, the others come with `animation:"all"` ([Animation](#animation)) |
 | `full_reset` | the last reset restarted the whole game |
 | `frame` | by `mode`: `{mode:"full", rows}` (`rows`: hex row strings, `null` with no stored frame; plus `auto_full:true` when a `diff` was asked and there was no previous frame to compare); `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null, changed_rows:[{y, row}]}` (every changed row, however many); `{mode:"none"}`; for `frame:"image"`: `{mode:"image", path}` (absolute path of the PNG), `{mode:"image", unavailable:"no_frame"}` (no frame stored), `{mode:"image", unavailable:"session_ended"}` (it ended during the call), or `{mode:"image", error}` (the file could not be written; the action still happened). `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
 | `online` | online sessions: `{scorecard_url, idle_close_at}` (ISO time) |
+| `animation` | only with `animation:"all"`: [Animation](#animation) |
 
 The observation schema is written out in each of `act`, `reset`, `observe` and `start_session` (the manifest has no `$ref`); `tests/manifest.test.mjs` pins the copies equal. Toolkit-sourced numbers are typed `number` and `state` a plain string, so a toolkit value never makes cc reject a reply (`PLUGIN_REPLY_INVALID`).
 
@@ -90,15 +91,28 @@ The observation schema is written out in each of `act`, `reset`, `observe` and `
 - Rendering fails loudly (throws / raises) on ragged rows, a non-hex digit, a shape outside 1–`FRAME_SIDE` or an option out of bounds.
 - `palette` is `arc_agi.rendering.COLOR_MAP` without alpha (pinned to `frontend/palette.js` by `tests/boardImage.test.mjs`, to the toolkit by the gated real-toolkit test). `grid.contrast` is stored in the spec; it was derived from `palette` by the rule "black where palette colour `i` has `0.299R + 0.587G + 0.114B ≥ 128`, else white", which `tests/boardImage.test.mjs` re-checks.
 
+### Animation
+
+An animating action returns several grids; `frame` always means the last one. `animation:"all"` on `act` or `observe` adds an `animation` field (and, in text, a section after the frame text). Without it nothing is added: the output is byte-identical to a call without the argument (`tests/fixtures/act-default.json`, `tests/animation-mcp.test.mjs`).
+
+- **Which step:** `act` returns the animation of the step it just took (`animation.step` = the result's `step`, built from the toolkit reply, no disk read). `observe` returns `animation_step` (default the latest). It reads the stored step: not a step, so no toolkit call, no `STEP_RATE_LIMITED` slot, no step line, and it works on ended sessions. `frame:"none"` returns only the animation.
+- **Indexes** are the toolkit's: stored leading frames are `0..k-1`, the last frame is `frame_count - 1`. A jump in `index` is a gap.
+- **Stored frames:** at most `ANIMATION_FRAMES_MAX` per step (`src/limits.js`, mirrored in `sidecar/engine.py`): the first `ANIMATION_FRAMES_MAX - 1` and the last; `frame_count` stays true. `omitted = frame_count - stored`. Steps recorded before animations were stored have only their last frame (`stored: 1`, text: `Earlier frames were not recorded`); a START step has `stored: 1`, `omitted: 0`.
+- **Paging:** at most `ANIMATION_PAGE_MAX` frames per call, from the first stored frame with `index >= animation_from`. `truncated: true` and `next_from` (the next stored index) say more is left; the text names `observe` with `animation:"all"`, `animation_step` and `animation_from:<next_from>`.
+- **json** `animation` = `{step, frame_count, stored, omitted, from, next_from, truncated, frames:[…]}`. The first frame of the page is `{index, mode:"full", rows}`; each later one `{index, mode:"diff", changed_cells, bbox, changed_rows}` against the frame before it (a change of shape gives `mode:"full", auto_full:true`). A terminal step with no frame gives `frames: []`. The top-level `frame`'s `changed_cells` remains last-to-last of steps.
+- **text:** a header line (step, `frame_count`, stored, shown indexes), then `frame <i> (full|diff, …):` with the grid (`DIFF_MAX_ROWS` applies as in [Frame text](#frame-text)), then the gap notice (`Frames a-b were not stored …`) and the `truncated:` line.
+- **Contact sheet:** with `frame:"image"` the frames go into one PNG instead: `animation.image` = `{path}` | `{unavailable:"no_frame"|"session_ended"}` | `{error}` and no `frames`; the board image is still written. Tiles are the board render of each frame under its `index` label, `sheet.columns` per row, `sheet.gap` apart and around (`sheet` in `src/board_image.json`; renderer `renderSheet` in `src/boardImage.js`). `image_scale` (default `sheet.scale_default`) and `image_grid` apply to the tiles. The file is `<data dir>/images/<sid>/anim-<n>-<seq>.png` (`n` = the animation's step, `seq` shared with the board images). Each kind (board, sheet) keeps only its newest file per session; a sheet write never removes the board image. `observe` with an image on an ended session → `SESSION_ENDED`.
+- **Refusals:** `animation_step`/`animation_from` without `animation:"all"` → `INVALID_ARGUMENT`; `animation_step` past the latest step, or a step that cannot be read → `STEP_UNKNOWN` (`details: {step}`, the latest step); `animation_from > 0` at or past `frame_count` → `INVALID_ARGUMENT` (`details: {frame_count}`).
+
 ### Refusals
 
 `{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw).
 
-Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, and image options without `frame:"image"`, come before all of these.
+Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, image options without `frame:"image"`, and animation options without `animation:"all"`, come before all of these.
 
 | Code | When | `details` keys |
 |---|---|---|
-| `INVALID_ARGUMENT` | schema violation; ACTION6 without `x`/`y`, or `x`/`y` on another action; `image_scale`/`image_grid` without `frame:"image"`; `reasoning` over the toolkit's byte bound as the toolkit measures it (ASCII-escaped JSON; double-encoded online) | `detail` (sidecar checks) |
+| `INVALID_ARGUMENT` | schema violation; ACTION6 without `x`/`y`, or `x`/`y` on another action; `image_scale`/`image_grid` without `frame:"image"`; `animation_step`/`animation_from` without `animation:"all"`; `animation_from` past the last frame (`details.frame_count`); `reasoning` over the toolkit's byte bound as the toolkit measures it (ASCII-escaped JSON; double-encoded online) | `detail` (sidecar checks) |
 | `SESSION_UNKNOWN` | no such session | |
 | `SESSION_ENDED` | session ended; also `observe` with `frame:"image"` on an ended session | `end_reason` |
 | `SESSION_BUSY` | another call on the session is in flight | |
@@ -118,6 +132,7 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `NETWORK_ERROR` | timeout / connection failure reaching arcprize.org; also `start_session` `online:true` for a game outside the offline bundle while the web game list can't be fetched | `detail` |
 | `RATE_LIMITED` | local guard for `ONLINE_RPM_LIMIT` (not sent), or a 429 from arcprize.org | `retry_after_ms` (local guard) |
 | `STEP_RATE_LIMITED` | the session took `STEP_RATE_MAX` steps in the last `STEP_RATE_WINDOW_MS` (`act`/`reset` in either format, and `note`); refused, never delayed, not sent | `retry_after_ms` |
+| `STEP_UNKNOWN` | `observe` with `animation:"all"` and an `animation_step` that is past the latest step or whose stored line cannot be read | `step` (the latest) |
 | `SESSION_STEP_LIMIT` | `act`/`reset` on a session whose step count reached `SESSION_STEPS_MAX`; `end_session` and start a new one | |
 | `TOO_MANY_NOTES` | `note` past `NOTES_MAX` notes on the session (json steps still play under the last run) | |
 | `SCORECARD_CLOSED` | arcprize.org no longer knows the game/scorecard; the session ends with `scorecard_auto_closed` | `detail` |
@@ -135,6 +150,7 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | `GET api/sessions?before&limit` | `{sessions:[meta…], total, next}`: newest first, at most `SESSIONS_PAGE_MAX`, starting after the session id `before` (400 if malformed); `next` is the `before` for the following page, `null` at the end; `total` counts every stored session |
 | `GET api/sessions/:id` | meta; 404 `SESSION_UNKNOWN` |
 | `GET api/sessions/:id/steps?from&limit` | `{steps:[…]}` with `n ≥ from`, at most `STEPS_PAGE_MAX` |
+| `GET api/sessions/:id/steps/:n/frames` | `{n, frame_count, stored, omitted, frames:[{index, rows}]}`: every stored frame of step `n` (at most `ANIMATION_FRAMES_MAX`), for the viewer's animation replay; 404 `SESSION_UNKNOWN` or `STEP_UNKNOWN` |
 | `GET api/sessions/:id/notes` | `{notes:[…]}`, every run note of the session in run order (at most `NOTES_MAX`); 404 `SESSION_UNKNOWN` |
 | `GET api/events` | SSE (below) |
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
@@ -155,6 +171,7 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 `{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
 
 - `source` is missing on steps recorded before scripting existed: read it as `tool`. `source:"script"` = a json-format call; `run` is set only on a script step taken after a note (a script step before the first note has none).
+- Step pages and the SSE `step` event carry the last frame only, never the animation (`anim`/`anim_z`); the frames route above serves it.
 - On disk a step line carries `frame_z` (base64 raw deflate of the rows joined by `\n`) instead of `frame`; every API and SSE step has `frame` rows. Lines with a plain `frame` still read. A corrupt or tampered stored frame reads as `frame: null` ([architecture.md](architecture.md) → On-disk state).
 
 ### Note
@@ -190,4 +207,4 @@ JSON lines between `src/sidecar.js` and `sidecar/arc_sidecar.py`: requests on th
 | `close` | `{session_id}` | `{scorecard: summary\|null}` |
 | `drop` | `{session_id}` | `{}` (forget without closing) |
 
-`obs` = `{state, levels_completed, win_levels, available_actions:[int], full_reset, frame_count, frame:[hex rows]|null}` (last frame only, validated to the palette and to `FRAME_MAX` in `sidecar/engine.py`).
+`obs` = `{state, levels_completed, win_levels, available_actions:[int], full_reset, frame_count, frame:[hex rows]|null, anim:[[hex rows], …]}`: `frame` is the last frame, validated to the palette and to `FRAME_MAX` in `sidecar/engine.py` (a bad one refuses). `anim` is the leading frames, oldest first: all of them up to `ANIMATION_FRAMES_MAX` frames, else the first `ANIMATION_FRAMES_MAX - 1`. A leading frame that fails the same validation empties `anim` (stderr warning) without refusing, because the toolkit has already applied the action.
