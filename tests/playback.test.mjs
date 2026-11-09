@@ -1,7 +1,7 @@
 // Paced live follow and Replay, on a fake clock (no real timers).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createPlayback, DEFAULT_INTERVAL_MS } from '../frontend/playback.js';
+import { createPlayback, DEFAULT_INTERVAL_MS, INTERVAL_MIN_MS, INTERVAL_MAX_MS, INTERVAL_STEP_MS } from '../frontend/playback.js';
 
 const I = DEFAULT_INTERVAL_MS;
 
@@ -28,8 +28,15 @@ function setup() {
     },
   };
   let changes = 0;
-  const pb = createPlayback({ clock, onChange: () => { changes++; } });
-  return { clock, pb, changes: () => changes };
+  // events: 'select:<cursor>' and 'change', in call order.
+  const events = [];
+  const pb = createPlayback({
+    clock,
+    onChange: () => { changes++; events.push('change'); },
+    onSelect: (i) => events.push(`select:${i}:${pb.cursor}`),
+  });
+  const selects = () => events.filter((e) => e.startsWith('select')).map((e) => Number(e.split(':')[1]));
+  return { clock, pb, changes: () => changes, events, selects };
 }
 
 // Pins: every live step is shown, in order, each held >= the interval.
@@ -287,4 +294,77 @@ test('behind is 0 in replay after seeking to the middle', () => {
   pb.seek(4);
   assert.equal(pb.mode, 'replay');
   assert.equal(pb.behind, 0);
+});
+
+// Pins: onSelect is the one selection signal; it fires for each way a step becomes shown.
+test('onSelect fires on a live arrival (idle and paced burst) and on paced advances', () => {
+  const { clock, pb, selects } = setup();
+  pb.load(1, 0, 'live');
+  clock.advance(2000);
+  pb.append();
+  assert.deepEqual(selects().slice(1), [1], 'idle arrival shows at once');
+  pb.append();
+  pb.append();
+  assert.deepEqual(selects().slice(1), [1], 'a burst waits');
+  clock.advance(I);
+  clock.advance(I);
+  assert.deepEqual(selects().slice(1), [1, 2, 3]);
+});
+
+test('onSelect fires on replay Play ticks, restart, seek (also the same index), load, jumpToLatest and Live', () => {
+  const { clock, pb, selects } = setup();
+  pb.load(4, 1, 'replay');
+  assert.deepEqual(selects(), [1], 'load');
+  pb.play();
+  assert.deepEqual(selects(), [1], 'resuming mid-history is not a selection');
+  clock.advance(I);
+  clock.advance(I);
+  assert.deepEqual(selects(), [1, 2, 3]);
+  pb.play();
+  assert.deepEqual(selects(), [1, 2, 3, 0], 'restart from the end selects step 0');
+  pb.pause();
+  pb.seek(2);
+  pb.seek(2);
+  assert.deepEqual(selects().slice(4), [2, 2], 'the same index twice selects twice');
+  pb.jumpToLatest();
+  pb.setMode('replay');
+  pb.setMode('live');
+  assert.deepEqual(selects().slice(6), [3, 3], 'jump, then Live; entering Replay is not one');
+});
+
+// Pins: only a change of the shown step selects; pacing-only and bookkeeping calls do not.
+test('onSelect does not fire on paused-replay append, pause, setMode replay, setIntervalMs, resume mid-history, or trim with cursor > 0', () => {
+  const { pb, selects } = setup();
+  pb.load(4, 2, 'replay');
+  const base = selects().length;
+  pb.append();
+  pb.setMode('replay');
+  pb.setIntervalMs(250);
+  pb.pause();
+  pb.play();
+  pb.pause();
+  pb.trim();
+  assert.equal(selects().length, base);
+});
+
+test('trim at cursor 0 selects the step that replaced the shown one', () => {
+  const { pb, selects } = setup();
+  pb.load(3, 0, 'replay');
+  pb.trim();
+  assert.deepEqual(selects(), [0, 0]);
+});
+
+// Pins: consumers see the new cursor in onSelect, before onChange renders.
+test('onSelect runs before onChange and sees the new cursor', () => {
+  const { pb, events } = setup();
+  pb.load(5, 0, 'replay');
+  events.length = 0;
+  pb.seek(3);
+  assert.deepEqual(events, ['select:3:3', 'change']);
+});
+
+// Pins: the default interval is a reachable slider position.
+test('the default interval lies on the slider grid', () => {
+  assert.ok(INTERVAL_MIN_MS <= DEFAULT_INTERVAL_MS && DEFAULT_INTERVAL_MS <= INTERVAL_MAX_MS);
+  assert.equal((DEFAULT_INTERVAL_MS - INTERVAL_MIN_MS) % INTERVAL_STEP_MS, 0);
 });

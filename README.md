@@ -3,7 +3,7 @@
 A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that lets agents play **ARC-AGI-3** games through the official `arc-agi` toolkit, while you watch: the live frame, every action, the agent's reasoning, and a replay scrubber.
 
 - **For agents:** MCP tools (`code-arc__list_games`, `code-arc__start_session`, `code-arc__act`, …) plus a `play-arc` skill that teaches good play. Scripted play goes through cc's `run_code`.
-- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, replay, and frame-by-frame animation replay.
+- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, replay, and animations that play automatically across the step interval.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
 Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/scripted-play.md](docs/scripted-play.md) (scripted play through `run_code`) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests) · [docs/bundle.md](docs/bundle.md) (bundle: install and games without the web).

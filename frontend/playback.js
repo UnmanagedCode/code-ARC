@@ -2,14 +2,21 @@
 // DOM), driven by an injected clock so it is testable without real timers.
 // Live mode holds every step on screen for at least the interval, however
 // fast steps arrive; Replay mode steps through history on Play.
+// onSelect(cursor) is the one signal that a step was (re)selected: it fires
+// synchronously after the cursor is set and before onChange, for every
+// selection (arrival, advance, seek, load, jump, Live, restart, the shown step
+// dropped by trim) and for nothing else. Pacing never depends on it.
 
-// The interval choices the UI offers.
-export const INTERVALS_MS = [100, 250, 500, 1000, 2000];
+// The interval slider's range and step.
+export const INTERVAL_MIN_MS = 100;
+export const INTERVAL_MAX_MS = 2000;
+export const INTERVAL_STEP_MS = 50;
 export const DEFAULT_INTERVAL_MS = 500;
 
 // clock: { now(): ms, setTimeout(fn, ms): handle, clearTimeout(handle) }
 // onChange(): called after every change of mode, playing, cursor, count or interval.
-export function createPlayback({ clock, onChange }) {
+// onSelect(cursor): optional, see above.
+export function createPlayback({ clock, onChange, onSelect = () => {} }) {
   let mode = 'live';
   let playing = false;
   let cursor = -1;
@@ -36,6 +43,7 @@ export function createPlayback({ clock, onChange }) {
     cursor++;
     lastShownAt = clock.now();
     if (mode === 'replay' && cursor === count - 1) playing = false;
+    onSelect(cursor);
     onChange();
     pump();
   }
@@ -55,6 +63,7 @@ export function createPlayback({ clock, onChange }) {
       mode = m;
       playing = false;
       lastShownAt = clock.now();
+      onSelect(cursor);
       onChange();
     },
     append() {
@@ -66,6 +75,7 @@ export function createPlayback({ clock, onChange }) {
     trim() {
       count--;
       if (cursor > 0) cursor--;
+      else onSelect(cursor);
       onChange();
     },
     setMode(m) {
@@ -75,6 +85,7 @@ export function createPlayback({ clock, onChange }) {
       if (m === 'live') {
         cursor = count - 1;
         lastShownAt = clock.now();
+        onSelect(cursor);
       }
       onChange();
     },
@@ -89,6 +100,7 @@ export function createPlayback({ clock, onChange }) {
       if (cursor >= count - 1) {
         cursor = 0;
         lastShownAt = clock.now();
+        onSelect(cursor);
       }
       pump();
       onChange();
@@ -105,12 +117,14 @@ export function createPlayback({ clock, onChange }) {
       cancel();
       cursor = count ? Math.max(0, Math.min(count - 1, i)) : -1;
       lastShownAt = clock.now();
+      onSelect(cursor);
       onChange();
     },
     jumpToLatest() {
       cancel();
       cursor = count - 1;
       lastShownAt = clock.now();
+      onSelect(cursor);
       onChange();
     },
     setIntervalMs(ms) {

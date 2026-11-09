@@ -43,12 +43,9 @@
             <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Step">
             <button id="next" type="button" aria-label="Next step">&#9654;</button>
             <span id="scrub-label" class="scrub-label muted"></span>
-            <label class="interval">Interval <select id="interval"></select></label>
+            <label class="interval">Interval <input id="interval" type="range"><output id="interval-value" for="interval"></output></label>
           </div>
-          <div id="anim" class="anim" role="group" aria-label="Animation" hidden>
-            <button id="anim-prev" type="button" aria-label="Previous animation frame">&#9664;</button>
-            <button id="anim-play" type="button" aria-label="Play animation">Play animation</button>
-            <button id="anim-next" type="button" aria-label="Next animation frame">&#9654;</button>
+          <div id="anim" class="anim" aria-live="off" hidden>
             <span id="anim-label" class="muted"></span>
             <span id="anim-note" class="anim-note muted"></span>
           </div>
