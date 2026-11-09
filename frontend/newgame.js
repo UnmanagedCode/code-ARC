@@ -28,7 +28,9 @@ export function createNewGame(panel, toggle, { onStarted }) {
     message.textContent = '';
     try {
       const r = await getJson('api/games');
+      const picked = select.value;
       select.replaceChildren(...r.games.map((g) => new Option(`${g.title} (${g.game_id})`, g.game_id)));
+      if (picked) select.value = picked; // reopening keeps the choice
       notice.textContent = r.web_unavailable ? `Web games unavailable (${r.web_unavailable.code}): only bundled games are listed.` : '';
       start.disabled = r.games.length === 0;
     } catch (e) {
