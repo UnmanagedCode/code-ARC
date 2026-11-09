@@ -101,13 +101,17 @@ test('the click hint is hidden in Replay', () => {
 test('keys: Space on a button is left alone, plays elsewhere, arrows play from a button', async () => {
   const { bar, sent } = setup();
   bar.update(meta('s-a'), LIVE);
-  const onButton = { closest: (sel) => (sel.includes('a[href]') ? {} : null) };
-  const space = key(' ', { target: onButton });
-  bar.key(space);
-  await tick();
-  assert.deepEqual([space.prevented, sent.length], [false, 0]);
+  const element = (kind) => ({ closest: (sel) => (sel.split(',').some((part) => part.trim() === kind) ? {} : null) });
+  const button = element('button');
+  const link = element('a[href]');
+  for (const target of [button, link]) {
+    const space = key(' ', { target });
+    bar.key(space);
+    await tick();
+    assert.deepEqual([space.prevented, sent.length], [false, 0], 'Space is the control\'s own');
+  }
 
-  const arrow = key('ArrowUp', { target: onButton });
+  const arrow = key('ArrowUp', { target: button });
   bar.key(arrow);
   await tick();
   assert.deepEqual([arrow.prevented, sent.length], [true, 1]);
@@ -117,6 +121,14 @@ test('keys: Space on a button is left alone, plays elsewhere, arrows play from a
   await tick();
   assert.deepEqual([space2.prevented, sent.length], [true, 2]);
   assert.match(sent[1], /s-a\/act$/);
+
+  // ACTION3 is not offered: on a control the key is left alone, elsewhere it is claimed (no page scroll) but sends nothing.
+  const unoffered = key('ArrowLeft', { target: button });
+  bar.key(unoffered);
+  const elsewhere = key('ArrowLeft');
+  bar.key(elsewhere);
+  await tick();
+  assert.deepEqual([unoffered.prevented, elsewhere.prevented, sent.length], [false, true, 2]);
 });
 
 // Pins: with no session to play (Replay), keys are not claimed.

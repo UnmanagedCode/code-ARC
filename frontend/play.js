@@ -29,7 +29,10 @@ export const onControl = (e) => Boolean(e.target?.closest?.(`${TYPING}, ${CONTRO
 // The action a keydown means, or null. One press is one action (a held key's
 // repeats are ignored, keeping it off the step budget); Ctrl/Meta/Alt presses
 // and typing into a form control are not play (Shift is: caps lock still
-// plays). Space on a focused button or link is that control's own activation.
+// plays). Space is not claimed while a button or link has focus: a button
+// activates itself on Space (so Space on a play-bar button sends that button's
+// action, on Start starts the game); on a link Space scrolls the page, and Enter
+// is what activates a link.
 export function actionForKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return null;
   if (e.target?.closest?.(TYPING)) return null;

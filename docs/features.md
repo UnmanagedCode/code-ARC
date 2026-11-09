@@ -31,13 +31,13 @@
 | Control | Key |
 |---|---|
 | Action 1–4 | ↑ ↓ ← → or W S A D |
-| Action 5 | Space |
+| Action 5 | Space, when no button or link has focus |
 | Action 7 | Z |
 | Reset (only with resets allowed) | R |
 | Action 6 | click a cell of the frame (sends its `x,y`) |
 | End | button; the first click arms it ("Confirm end"), the second ends the session |
 
-- Buttons are enabled only for the actions the game currently offers; after `GAME_OVER` or a win none are. A held key sends one action; typing in a form control, pressing Ctrl, Meta or Alt with a key (Shift is not excluded), or pressing Space on a focused button or link (that is the control's own activation) sends nothing. Arrow, WASD, Z and R still play while a button has focus.
+- Buttons are enabled only for the actions the game currently offers; after `GAME_OVER` or a win none are. A held key sends one action; typing in a form control, pressing Ctrl, Meta or Alt with a key (Shift is not excluded) sends nothing. The play bar doesn't claim Space while a button or link has focus: the focused control does its own activation (Space on Start starts the game, on an action button sends that action; Enter activates a link). Arrow, WASD, Z and R still play while a button has focus.
 - Controls work in **Live** mode only. In Replay every control is disabled ("Replay — switch to Live to play") and keys and clicks send nothing; a frame click also needs the shown step to be the latest ("Catching up…" otherwise).
 - A refusal of an action (for example the step rate) shows under the buttons as the server's message and code, with the retry time when it gives one; it belongs to the session it was sent on and disappears when you select another. A one-run session has no Reset button and ignores R. Start refused at the live-session cap shows the message in the New game panel. Arming End is cancelled by any other action, by selecting another session and by leaving Live.
 - Human steps carry a `human` badge in the action log and show "(human move)" as reasoning; there is no reasoning field.
