@@ -3,7 +3,7 @@
 A [code-conductor](https://github.com/UnmanagedCode/code-conductor) plugin that lets agents play **ARC-AGI-3** games through the official `arc-agi` toolkit, while you watch: the live frame, every action, the agent's reasoning, and a replay scrubber.
 
 - **For agents:** MCP tools (`code-arc__list_games`, `code-arc__start_session`, `code-arc__act`, …) plus a `play-arc` skill that teaches good play. Scripted play goes through cc's `run_code`.
-- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, replay, and animations that play automatically across the step interval.
+- **For you:** a **Code ARC** view in cc with the session list, the game frame in the ARC palette, the action log, the reasoning per step, replay, and animations that play automatically across the step interval, or start a game and play it yourself from the view.
 - **Settings:** your ARC API key (optional; without one the toolkit's anonymous key is used).
 
 Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protocol.md](docs/protocol.md) (tools, refusal codes, HTTP API, wire formats) · [docs/scripted-play.md](docs/scripted-play.md) (scripted play through `run_code`) · [docs/architecture.md](docs/architecture.md) (internals, on-disk state, tests) · [docs/bundle.md](docs/bundle.md) (bundle: install and games without the web).
@@ -12,7 +12,7 @@ Details: [docs/features.md](docs/features.md) (what you can do) · [docs/protoco
 
 1. Enable the plugin in cc (**Settings → Plugins**). On first start the backend builds its Python venv in the background (about a minute on a cold cache); the view shows a banner until the toolkit is ready. To build it ahead of time: `node scripts/setup.mjs` in the plugin checkout.
 2. Optional: open **Code ARC → Settings** and paste an API key from [arcprize.org](https://arcprize.org).
-3. Ask any agent: *"play an ARC game"*. Watch it in the **Code ARC** view.
+3. Ask any agent: *"play an ARC game"* and watch it in the **Code ARC** view, or click **New game** and play it yourself.
 
 Standalone (no cc): `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir PORT=8791 node server.js`, then open `http://127.0.0.1:8791/`.
 
@@ -66,6 +66,7 @@ For a host without network: on a machine with network run `node scripts/bundle.m
 - Scripted play uses cc's `run_code`, which cc refuses (`SCRIPT_UNAVAILABLE_REMOTE`) for a session whose project lives on a remote System; those workers play with the tools directly.
 - The **script** badge follows cc's json format: a json MCP client that isn't a `run_code` program shows as script.
 - `requirements.txt` pins versions but not hashes (wheels are platform-specific).
+- A game you started in the view stays live (holding a live slot and blocking API key changes) until you end it there; local sessions never idle-close.
 - Live sessions end when the backend restarts (toolkit environments are in-process).
 - Online sessions need network, are rate-limited, and their scorecards auto-close after idling; arcprize.org's server-side reasoning bound is checked conservatively.
 - **DNS rebinding is not blocked** (inherited from code-conductor's posture). The backend accepts any `Host` header: cc's plugin proxy forwards the browser's `Host` (localhost, LAN address, remote or tunnel name), so an allowlist would break the view for those users, and code-conductor itself documents DNS rebinding as a known, out-of-scope limitation of its own `/api` (its `docs/protocol.md` → WebSocket protocol → Handshake: Origin check), which a rebinding page could use to reach far more than this plugin. The same-origin JSON, `Sec-Fetch-Site` and `Origin` guards stay.

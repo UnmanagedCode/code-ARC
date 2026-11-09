@@ -2,7 +2,7 @@
 
 ## The Code ARC view
 
-- **Session list** (newest first; the newest page loads at once, **Load older sessions** fetches more): game title, `local`/`online` badge, status (`Live`, `Stalled`, or how it ended), step and state, and who is playing — the cc session id (shortened) and project, or "unknown caller". Inside cc, **Open session** jumps to the playing agent's session (when it is live).
+- **Session list** (newest first; the newest page loads at once, **Load older sessions** fetches more): game title, `local`/`online` badge, status (`Live`, `Stalled`, or how it ended), step and state, and who is playing — the cc session id (shortened) and project, "unknown caller", or "You (Code ARC view)" with a `human` badge for a game you started. Ended-by-you sessions read "Ended by user". Inside cc, **Open session** jumps to the playing agent's session (when it is live).
 - **Header strip:** game, state, levels as `completed/total`, mode, and for online sessions a **Scorecard on arcprize.org** link. Badges for a stalled session and for "Scorecard auto-closed by arcprize.org (15 min idle)".
 - **Frame:** the 64×64 grid in the ARC palette, scaled crisply. Hover a cell to see `x,y = value`.
 - **Live and Replay modes:** a **Live | Replay** switch next to the scrubber.
@@ -24,6 +24,25 @@
 - **Toolkit source:** the header says where the toolkit and games come from: `Toolkit and local games: bundle <id> (<n> games)` or `Toolkit and games: web`.
 - Follows cc's light/dark theme (or the OS theme standalone) and cc's session width.
 
+## Play a game yourself
+
+**New game** (top right) opens a picker: choose a game, optionally **Online (arcprize.org)** (local mode runs the game's code on this machine) and **Allow resets** (off = one run), then **Start**. The new session is selected and gets a play bar under the frame. You play only sessions you started here; agents' sessions stay watch-only, and agents cannot act on yours (they can observe it).
+
+| Control | Key |
+|---|---|
+| Action 1–4 | ↑ ↓ ← → or W S A D |
+| Action 5 | Space |
+| Action 7 | Z |
+| Reset (only with resets allowed) | R |
+| Action 6 | click a cell of the frame (sends its `x,y`) |
+| End | button; the first click arms it ("Confirm end"), the second ends the session |
+
+- Buttons are enabled only for the actions the game currently offers; after `GAME_OVER` or a win none are. A held key sends one action; typing in a form control or pressing a modified key sends nothing.
+- Controls work in **Live** mode only. In Replay every control is disabled ("Replay — switch to Live to play") and keys and clicks send nothing; a frame click also needs the shown step to be the latest ("Catching up…" otherwise).
+- A refusal (step rate, live-session cap, one-run reset, …) shows under the buttons as the server's message and code, with the retry time when it gives one.
+- Human steps carry a `human` badge in the action log and show "(human move)" as reasoning; there is no reasoning field.
+- A game left running (tab closed) stays live, counts toward the live-session cap and blocks API key changes until you end it here.
+
 ## Settings
 
 - **ARC API key:** paste, **Save**, **Clear**. Shown only masked: the last four characters, or nothing for keys shorter than `TAIL_MIN_LENGTH` (`src/keyStore.js`). Empty means the toolkit's anonymous key.
@@ -31,7 +50,7 @@
 
 ## Agent tools
 
-`list_games`, `start_session`, `act`, `reset`, `observe`, `end_session`, `list_sessions`, `note` — contracts in [protocol.md](protocol.md).
+`list_games`, `start_session`, `act`, `reset`, `observe`, `end_session`, `list_sessions`, `note` — contracts in [protocol.md](protocol.md). Sessions a person started in the view are observable but not actionable (`HUMAN_SESSION`).
 
 - Frames come as text (one hex digit per cell with coordinate headers); `act` sends only the changed rows by default, which keeps a typical move to a few lines.
 - **Animations:** an action can animate (`frame_count > 1`); `frame` is always the last frame. An agent adds `animation:"all"` to `act`, or calls `observe` with `animation:"all"` and the `animation_step` from the `act` result, to get the frames: the first full, each later one a diff against the frame before, a page at a time (`truncated` and `next_from` say how to continue). With `frame:"image"` it gets one contact-sheet PNG of numbered tiles instead. Past `ANIMATION_FRAMES_MAX` frames a step stores the first ones and the last (the result says which indexes are missing); steps recorded earlier have only their last frame. Details: [protocol.md](protocol.md) → Animation.
