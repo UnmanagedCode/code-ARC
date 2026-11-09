@@ -15,16 +15,10 @@ import { IMAGE_SPEC } from './boardImage.js';
 import { frameData, frameText } from './frames.js';
 import { observationFields } from './observation.js';
 import { validate } from './schema.js';
-import { refuse } from './sessions.js';
+import { refusalBody, refuse } from './sessions.js';
 import { endText, gamesText, noteText, observationText, sessionsText } from './toolText.js';
 
 const TOOLS = new Map(manifest.mcp.tools.map((t) => [t.name, t.inputSchema]));
-
-// The refusal body: the service's extras ride in `details`, omitted when empty.
-function toError({ reason, code, ok: _ok, ...extra }) {
-  const details = Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined));
-  return { error: reason, code, ...(Object.keys(details).length ? { details } : {}) };
-}
 
 // The json view never carries `ok` (a structured `ok:false` would read as a refusal).
 const withoutOk = ({ ok: _ok, ...rest }) => rest;
@@ -168,7 +162,7 @@ export function createMcp({ sessions, images, log = console }) {
       };
       try {
         const out = await handler(v.args, caller);
-        if (out.ok === false) return toError(out);
+        if (out.ok === false) return refusalBody(out);
         return format === 'json' ? { structured: out.json() } : { text: out.text() };
       } catch (e) {
         log.error(`[code-arc] tool ${body.tool} failed: ${e.stack || e.message}`);

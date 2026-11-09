@@ -6,7 +6,7 @@ import path from 'node:path';
 import { send } from './http.js';
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
-const FILES = ['index.html', 'app.css', 'app.js', 'api.js', 'grid.js', 'palette.js', 'sessions.js', 'steplog.js', 'runs.js', 'settings.js', 'safeHref.js', 'playback.js', 'animation.js'];
+const FILES = ['index.html', 'app.css', 'app.js', 'api.js', 'grid.js', 'palette.js', 'sessions.js', 'steplog.js', 'runs.js', 'settings.js', 'safeHref.js', 'playback.js', 'animation.js', 'play.js', 'newgame.js', 'playbar.js'];
 
 export function createStatic({ frontendDir }) {
   const allowed = new Map(FILES.map((f) => [`/${f}`, f]));

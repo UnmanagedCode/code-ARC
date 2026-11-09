@@ -1,7 +1,7 @@
 // Validation against a flat JSON-schema subset (the one cc allows for tool
 // manifests): object input, typed properties, enum, bounds, lengths, pattern,
 // required, defaults; unknown keys are refused. Shared by the MCP handlers and
-// the script routes.
+// the human play routes (src/play.js).
 
 // Returns {args} (with defaults filled) or {error}.
 export function validate(schema, input) {

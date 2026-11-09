@@ -142,7 +142,7 @@ test('session routes: list, get, paged steps bounded by STEPS_PAGE_MAX', async (
   assert.deepEqual(page.map((s) => s.n), [150, 151, 152]);
   assert.equal((await json(`${url}/api/sessions/s-000000000000`)).status, 404);
   assert.equal((await json(`${url}/api/sessions/..%2Fsecrets`)).status, 404);
-  assert.equal((await sendJsonReq(`${url}/api/sessions`, 'POST', {})).status, 405);
+  assert.equal((await sendJsonReq(`${url}/api/sessions`, 'PUT', {})).status, 405);
 });
 
 // Pins the contract Replay relies on: an ended session's steps stay readable.

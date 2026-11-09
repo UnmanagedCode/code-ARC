@@ -8,6 +8,7 @@ import { createBoardImages } from './boardImages.js';
 import { createBootstrap } from './bootstrap.js';
 import { createKeyStore } from './keyStore.js';
 import { createMcp } from './mcp.js';
+import { createPlayRoutes } from './play.js';
 import { createSessions } from './sessions.js';
 import { createSidecar } from './sidecar.js';
 import { createSseHub } from './sse.js';
@@ -125,6 +126,7 @@ export async function createApp({
       });
     }],
     ['DELETE', '/api/settings/api-key', async (req, res) => changeKey(res, () => keyStore.clear())],
+    ...createPlayRoutes({ sessions }),
     ['POST', '/api/mcp', async (req, res) => sendJson(res, 200, await mcp.handle(await readJsonBody(req)))],
   ];
 

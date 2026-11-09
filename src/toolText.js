@@ -93,7 +93,8 @@ export function sessionsText(r, offset = 0) {
     if (s.end_reason) parts.push(`end_reason ${s.end_reason}`);
     if (s.state !== undefined) parts.push(`state ${s.state} · levels_completed ${s.levels_completed}/${s.win_levels}`);
     parts.push(`step ${s.step}`);
-    if (scope === 'all' && s.owner?.sessionId) parts.push(`owner ${s.owner.sessionId}`);
+    if (scope === 'all' && s.owner?.kind === 'human') parts.push('owner human (Code ARC view)');
+    else if (scope === 'all' && s.owner?.sessionId) parts.push(`owner ${s.owner.sessionId}`);
     if (s.scorecard_url) parts.push(`scorecard_url ${s.scorecard_url}`);
     parts.push(`updated ${s.updated_at}`);
     lines.push(parts.join(' · '));

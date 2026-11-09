@@ -1,10 +1,13 @@
 // The session service: lifecycle, ownership, gating, ONLINE and step limits,
 // script runs, the idle sweep and live events. Shared by the MCP handlers and
-// the HTTP read routes.
+// the HTTP read and human play routes.
 // Every public method resolves; a refusal is {ok:false, code, reason, ...}.
 // A caller is {sessionId, project} (ownership applies) plus an optional
 // `source`: 'script' marks the steps it takes as scripted (src/mcp.js sets it
-// from the call's format); anything else is a tool step.
+// from the call's format); 'human' is the Code ARC view's play routes
+// (src/play.js), the only producer of it; anything else is a tool step.
+// A session's owner is {kind:'agent'|'human', sessionId, project}; a human
+// and an agent never act on each other's sessions (see `admit`).
 import { randomBytes } from 'node:crypto';
 import {
   ACTIONS, COMPLEX_ACTION, COORD_MAX, DEADLINES, DETAIL_MAX, GAME_ID_RE, MAX_LIVE_SESSIONS, NOTE_MAX_CHARS, NOTES_MAX,
@@ -39,9 +42,19 @@ const REASONS = {
 };
 
 export const refuse = (code, reason, extra = {}) => ({ ok: false, code, reason, ...extra });
+// The refusal body both surfaces send: the service's extras ride in `details`, omitted when empty.
+export function refusalBody({ reason, code, ok: _ok, ...extra }) {
+  const details = Object.fromEntries(Object.entries(extra).filter(([, v]) => v !== undefined));
+  return { error: reason, code, ...(Object.keys(details).length ? { details } : {}) };
+}
+// A missing kind is a legacy meta (stored before humans could play): an agent's.
+export const ownerKind = (meta) => (meta.owner?.kind === 'human' ? 'human' : 'agent');
+export const HUMAN = Object.freeze({ sessionId: null, project: null, source: 'human' });
+const isHuman = (caller) => caller?.source === 'human';
 export const actionName = (n) => (n === 0 ? 'RESET' : `ACTION${n}`);
 const newId = () => `s-${randomBytes(6).toString('hex')}`;
 const TOOL = Object.freeze({ source: 'tool' });
+const HUMAN_TAG = Object.freeze({ source: 'human' });
 const lastSummary = (o) => ({ state: o.state, levels_completed: o.levels_completed, win_levels: o.win_levels, available_actions: o.available_actions, frame_count: o.frame_count, full_reset: o.full_reset });
 
 // `images` is the board image store (src/boardImages.js), pruned when a
@@ -146,12 +159,16 @@ export function createSessions({
     return { ok: true, meta: next, obs, prev, online: onlineInfo(next) };
   }
 
-  // Who may touch a live session: its owner (or a caller the collision guard
-  // can't tell apart from it).
+  // Who may touch a live session: its owner kind first (a person's game is the
+  // view's, an agent's is agents'), then, between agents, its owner (or a
+  // caller the collision guard can't tell apart from it).
   function admit(id, caller) {
     const meta = store.get(id);
     if (!meta) return { refusal: refuse('SESSION_UNKNOWN', 'no such session; list_sessions recovers ids') };
     if (meta.status !== 'live') return { refusal: refuse('SESSION_ENDED', 'this session has ended', { end_reason: meta.end_reason }) };
+    const human = ownerKind(meta) === 'human';
+    if (human && !isHuman(caller)) return { refusal: refuse('HUMAN_SESSION', 'a person started this game in the Code ARC view and is playing it: you may observe it, but do not act on, note on or end it; start your own game with start_session') };
+    if (!human && isHuman(caller)) return { refusal: refuse('AGENT_SESSION', 'an agent is playing this session; the view can only watch it') };
     const owner = meta.owner?.sessionId;
     const who = caller?.sessionId ?? null;
     if (owner && who && owner !== who) return { refusal: refuse('NOT_OWNER', 'another agent session started this game; leave it alone') };
@@ -221,6 +238,7 @@ export function createSessions({
 
   // A script step records the session's current run, once a note opened one.
   const tagOf = (id, caller) => {
+    if (isHuman(caller)) return HUMAN_TAG;
     if (caller?.source !== 'script') return TOOL;
     const run = runtime.get(id)?.runs;
     return run ? { source: 'script', run } : { source: 'script' };
@@ -298,7 +316,7 @@ export function createSessions({
           title,
           mode: online ? 'online' : 'local',
           allow_reset: allowReset,
-          owner: { sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
+          owner: isHuman(caller) ? { kind: 'human', sessionId: null, project: null } : { kind: 'agent', sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
           scorecard_id: card,
           scorecard_url: online ? scorecardUrl(card) : null,
           status: 'live',
@@ -430,7 +448,7 @@ export function createSessions({
         r.inflight = false;
       }
       const final = { state: meta.last.state, levels_completed: meta.last.levels_completed, win_levels: meta.last.win_levels, scorecard: res.ok ? res.result.scorecard : null };
-      const ended = await end(id, 'ended_by_agent', { final });
+      const ended = await end(id, isHuman(caller) ? 'ended_by_user' : 'ended_by_agent', { final });
       const out = { ok: true, session_id: id, game_id: ended.game_id, steps: ended.step_count, final };
       if (meta.mode === 'online') out.scorecard_url = meta.scorecard_url;
       if (!res.ok) out.warnings = [{ code: PASS_THROUGH.has(res.code) ? res.code : 'TOOLKIT_ERROR', detail: String(res.detail || '').slice(0, DETAIL_MAX), note: 'the session is ended; the scorecard may not have closed cleanly' }];
@@ -441,7 +459,7 @@ export function createSessions({
     // whole scope. Paging a long list is the text view's concern (src/toolText.js).
     listSessions({ scope = 'mine', offset = 0 } = {}, caller) {
       const who = caller?.sessionId ?? null;
-      const all = store.list().filter((m) => scope === 'all' || (m.owner?.sessionId ?? null) === who);
+      const all = store.list().filter((m) => scope === 'all' || (ownerKind(m) === 'agent' && (m.owner?.sessionId ?? null) === who));
       const list = all.slice(offset);
       return {
         ok: true,
@@ -450,7 +468,7 @@ export function createSessions({
         sessions: list.map((m) => ({
           session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, allow_reset: resetAllowed(m), status: m.status, end_reason: m.end_reason,
           stalled: m.stalled, state: m.last?.state, levels_completed: m.last?.levels_completed, win_levels: m.last?.win_levels,
-          step: m.step_count, owner: m.owner, updated_at: m.updated_at, ...(m.mode === 'online' ? { scorecard_url: m.scorecard_url } : {}),
+          step: m.step_count, owner: { kind: ownerKind(m), sessionId: m.owner?.sessionId ?? null, project: m.owner?.project ?? null }, updated_at: m.updated_at, ...(m.mode === 'online' ? { scorecard_url: m.scorecard_url } : {}),
         })),
       };
     },

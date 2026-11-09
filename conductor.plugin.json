@@ -2165,10 +2165,18 @@
                     "type": "object",
                     "additionalProperties": false,
                     "required": [
+                      "kind",
                       "sessionId",
                       "project"
                     ],
                     "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "agent",
+                          "human"
+                        ]
+                      },
                       "sessionId": {
                         "type": [
                           "string",
