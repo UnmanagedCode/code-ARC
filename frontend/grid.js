@@ -2,7 +2,16 @@
 // scaled up by CSS; hovering shows the cell's coordinates and value.
 import { RGBA } from './palette.js';
 
-export function createGrid(canvas, hoverEl) {
+// The cell under a point of a w×h grid stretched over `rect` (the canvas's
+// bounding box), clamped to the grid.
+export function cellAt(rect, clientX, clientY, w, h) {
+  const x = Math.min(w - 1, Math.max(0, Math.floor(((clientX - rect.left) / rect.width) * w)));
+  const y = Math.min(h - 1, Math.max(0, Math.floor(((clientY - rect.top) / rect.height) * h)));
+  return { x, y };
+}
+
+// `onCell({x, y})` runs when a drawn frame is clicked.
+export function createGrid(canvas, hoverEl, { onCell } = {}) {
   const ctx = canvas.getContext('2d');
   let rows = null;
 
@@ -35,10 +44,12 @@ export function createGrid(canvas, hoverEl) {
 
   canvas.addEventListener('mousemove', (e) => {
     if (!rows) return;
-    const r = canvas.getBoundingClientRect();
-    const x = Math.min(rows[0].length - 1, Math.max(0, Math.floor(((e.clientX - r.left) / r.width) * rows[0].length)));
-    const y = Math.min(rows.length - 1, Math.max(0, Math.floor(((e.clientY - r.top) / r.height) * rows.length)));
+    const { x, y } = cellAt(canvas.getBoundingClientRect(), e.clientX, e.clientY, rows[0].length, rows.length);
     hoverEl.textContent = `x,y = ${x},${y}  value = ${parseInt(rows[y][x], 16)}`;
+  });
+  canvas.addEventListener('click', (e) => {
+    if (!rows || !onCell) return;
+    onCell(cellAt(canvas.getBoundingClientRect(), e.clientX, e.clientY, rows[0].length, rows.length));
   });
   canvas.addEventListener('mouseleave', () => { hoverEl.textContent = ' '; });
 

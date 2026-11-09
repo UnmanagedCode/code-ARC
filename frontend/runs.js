@@ -2,7 +2,7 @@
 // goes in the action log, and the note that explains a run. Pure: no DOM.
 
 // A step without `source` predates scripting and came from a tool.
-export const sourceOf = (step) => (step?.source === 'script' ? 'script' : 'tool');
+export const sourceOf = (step) => (step?.source === 'script' || step?.source === 'human' ? step.source : 'tool');
 
 // A script step belongs to a run once a note opened one; a script step taken
 // before the first note has none.

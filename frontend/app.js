@@ -3,6 +3,9 @@
 import { createAnimation } from './animation.js';
 import { getJson, subscribe } from './api.js';
 import { createGrid } from './grid.js';
+import { createNewGame } from './newgame.js';
+import { createPlayBar } from './playbar.js';
+import { isHumanSession, playable } from './play.js';
 import { hasRun, mergeNotes, noteFor, sourceOf } from './runs.js';
 import { safeHref } from './safeHref.js';
 import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
@@ -60,9 +63,12 @@ function onSelected(step) {
   if (!state.scrubbing) anim.prefetch(state.steps[playback.cursor + 1]);
 }
 
-const grid = createGrid($('grid'), $('hover'));
+const playbar = createPlayBar($('playbar'));
+const grid = createGrid($('grid'), $('hover'), { onCell: (c) => playbar.cell(c) });
 const log = createStepLog($('steplog'), { onPick: (i) => playback.seek(i), noteOf: (step) => noteFor(state.notes, step) });
 createSettings($('settings'), $('settings-toggle'));
+createNewGame($('newgame'), $('newgame-toggle'), { onStarted: (id) => select(id) });
+document.addEventListener('keydown', (e) => playbar.key(e));
 
 const sortedSessions = () => [...state.sessions.values()].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
 
@@ -117,6 +123,7 @@ function renderHeader() {
   );
   facts.append(el('span', 'fact', s.allow_reset !== false ? 'Resets: on' : 'Resets: off (one run)'));
   const badges = el('div', 'badges');
+  if (isHumanSession(s)) badges.append(badge('Human play', 'owner-human'));
   if (s.status === 'live') badges.append(badge(s.stalled ? 'Stalled: waiting for the toolkit' : 'Live', s.stalled ? 'status-stalled' : 'status-live'));
   else if (s.end_reason === 'scorecard_auto_closed') badges.append(badge('Scorecard auto-closed by arcprize.org (15 min idle)', 'status-warn'));
   else badges.append(badge(END_REASONS[s.end_reason] || 'Ended', 'status-ended'));
@@ -132,6 +139,13 @@ function renderHeader() {
     }
   }
   box.replaceChildren(...parts);
+}
+
+// The play bar follows the selected session and the Live/Replay view.
+function renderPlay() {
+  const s = state.sessions.get(state.selected);
+  playbar.update(s, { mode: playback.mode, behind: playback.behind });
+  document.querySelector('.frame-wrap').classList.toggle('playable', Boolean(playable(s)) && playback.mode === 'live');
 }
 
 function renderControls() {
@@ -154,6 +168,7 @@ function renderControls() {
   $('behind').hidden = !showBehind;
   $('latest').hidden = !showBehind;
   $('behind').textContent = `${behind} ${behind === 1 ? 'step' : 'steps'} behind`;
+  renderPlay();
 }
 
 function renderAnim() {
@@ -192,6 +207,10 @@ function renderStep() {
 // A script step in a run shows the run's note, then its own reasoning.
 function renderReasoning(step) {
   const box = $('reasoning');
+  if (sourceOf(step) === 'human') {
+    box.textContent = '(human move)';
+    return;
+  }
   if (!hasRun(step)) {
     box.textContent = step.reasoning || '(no reasoning given)';
     return;
@@ -450,7 +469,10 @@ subscribe({
     if (isNew && isNewerThanAll(meta, state.sessions.values())) state.total++;
     state.sessions.set(meta.id, meta);
     renderList();
-    if (meta.id === state.selected) renderHeader();
+    if (meta.id === state.selected) {
+      renderHeader();
+      renderPlay();
+    }
     if (isNew && !state.selected) select(meta.id);
   },
   step: onStep,
