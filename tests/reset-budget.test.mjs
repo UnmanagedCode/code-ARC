@@ -75,11 +75,12 @@ test('RESET_UNNEEDED before any move on a level (after START, after a RESET, aft
   const { mcp, calls } = await startApp(t, FAST);
   const sid = await startGame(mcp, 'fake-maze', { max_resets: 5 });
   const unneeded = async (label) => {
-    const before = [await resets(calls), (await observe(mcp, sid)).step];
+    const b = await observe(mcp, sid);
+    const before = [await resets(calls), b.step, b.resets_used];
     const r = refusal(await mcp('reset', { session_id: sid }), 'RESET_UNNEEDED');
     assert.equal(r.details.state, 'NOT_FINISHED', label);
     const o = await observe(mcp, sid);
-    assert.deepEqual([await resets(calls), o.step, o.resets_used], [...before, o.resets_used], label);
+    assert.deepEqual([await resets(calls), o.step, o.resets_used], before, label);
     return o;
   };
   assert.equal((await unneeded('start')).resets_used, 0);
@@ -183,4 +184,23 @@ test('max_resets must be an integer >= 0; allow_reset is an unknown argument', a
     assert.equal((await app.sessions.start({ game_id: 'fake-maze', max_resets: bad }, { sessionId: 'agent-a' })).code, 'INVALID_ARGUMENT', String(bad));
   }
   refusal(await mcp('start_session', { game_id: 'fake-maze', allow_reset: true }), 'INVALID_ARGUMENT');
+});
+
+// Pins: GAME_FINISHED outranks RESET_LIMIT: a won one-run session is told the game is won, not that it has no resets.
+test('refusal order: a WIN with max_resets 0 is GAME_FINISHED, not RESET_LIMIT', async (t) => {
+  const { mcp, calls } = await startApp(t, FAST);
+  const sid = await startGame(mcp, 'fake-maze');
+  assert.equal((await win(mcp, sid)).state, 'WIN');
+  const before = await resets(calls);
+  const r = refusal(await mcp('reset', { session_id: sid }), 'GAME_FINISHED');
+  assert.deepEqual(r.details, { state: 'WIN' });
+  assert.equal(await resets(calls), before);
+});
+
+// Pins: RESET_LIMIT outranks RESET_UNNEEDED: a one-run session at its start is told it has no resets, not to move first.
+test('refusal order: max_resets 0 right after START is RESET_LIMIT, not RESET_UNNEEDED', async (t) => {
+  const { mcp } = await startApp(t, FAST);
+  const sid = await startGame(mcp, 'fake-maze');
+  const r = refusal(await mcp('reset', { session_id: sid }), 'RESET_LIMIT');
+  assert.deepEqual(r.details, { max_resets: 0, resets_used: 0 });
 });
