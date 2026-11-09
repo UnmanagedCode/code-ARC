@@ -150,6 +150,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .scrubber input[type="range"] { flex: 1 1 4rem; min-width: 4rem; accent-color: var(--primary); }
 .scrub-label { font-size: 0.78rem; min-width: 6rem; }
 .interval { font-size: 0.82rem; display: inline-flex; gap: 0.25rem; align-items: center; }
+.interval input[type=range] { width: 9rem; }
+.interval output { min-width: 4.5em; font-variant-numeric: tabular-nums; }
 .mode-switch { display: inline-flex; }
 .mode-switch button { border-radius: 0; }
 .mode-switch button:first-child { border-radius: var(--radius) 0 0 var(--radius); }

@@ -15,10 +15,12 @@
 //   script-burst.png   after a live 300-step script burst, caught up with Jump to latest
 //   paced-behind.png   mid-burst in Live: the shown step lags, "N steps behind" and Jump to latest
 //   replay.png         Replay playing through the maze session
-//   anim-frame.png     a two-frame step: animation controls, Previous frame shows the shadow frame
-//   anim-play.png      Play animation ended on the last frame (Replay animation offered)
-//   anim-single.png    the START step: no animation controls
+//   anim-auto.png      a two-frame step opened at a 2000 ms interval: frame 0, no animation buttons
+//   anim-end.png       the same step after it played once: held on the last frame
+//   anim-live.png      a live arrival animating from its first frame
+//   anim-single.png    the START step: no animation line
 //   anim-gap.png       a 70-frame step: only 64 stored, the not-stored note
+//   interval-slider.png the interval slider row at its minimum, showing its value
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
@@ -27,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
 import { bootArc, bootDiverged, bootSeeded, mcp, sessionId } from './boot.mjs';
 import { SSE_MAX_CLIENTS } from '../../src/limits.js';
+import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, INTERVAL_STEP_MS } from '../../frontend/playback.js';
 
 const { withPage } = await import(BROWSER);
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
@@ -247,7 +250,7 @@ try {
     page.on('request', (r) => { const m = r.url().match(/\/steps\?from=(\d+)/); if (m) stepFetches.push(Number(m[1])); });
     const hogs = new AbortController();
     await Promise.all(Array.from({ length: SSE_MAX_CLIENTS }, () => fetch(`${fast.url}/api/events`, { signal: hogs.signal })));
-    await page.locator('#interval').selectOption('100');
+    await page.locator('#interval').fill('100');
     for (let i = 0; i < 30; i++) await play('act', { action: 'ACTION6', x: i, y: 40, reasoning: `while away ${i + 1}` });
     await page.waitForFunction(() => document.getElementById('scrub-label').textContent === 'step 340 of 340', null, { timeout: 15000 });
     hogs.abort();
@@ -271,32 +274,62 @@ try {
     page.on('response', (r) => { if (r.status() >= 400 && !/pluginBridge|pluginTheme/.test(r.url())) problems.push(`${r.status()} ${new URL(r.url()).pathname}`); });
     const label = () => page.locator('#anim-label').textContent();
     const canvas = () => page.evaluate(() => document.getElementById('grid').toDataURL());
+    const slider = page.locator('#interval');
     await page.goto(animSrv.url);
+    // The slider's grid is the playback constants; 2000 ms gives 1 s per frame on a two-frame step.
+    for (const [attr, want] of [['min', INTERVAL_MIN_MS], ['max', INTERVAL_MAX_MS], ['step', INTERVAL_STEP_MS]]) {
+      if ((await slider.getAttribute(attr)) !== String(want)) problems.push(`#interval ${attr} is not ${want}`);
+    }
+    await slider.fill('2000');
+    await page.locator('#interval-value', { hasText: '2000 ms' }).waitFor();
+
+    // Opening the session selects its newest step, which plays by itself, once.
     await page.getByRole('button', { name: /Fake Maze/ }).click();
-    await page.locator('#steplog li').nth(1).waitFor();
-    await page.locator('#scrub-label', { hasText: 'step 1 of 1' }).waitFor();
-    await page.locator('#anim:not([hidden])').waitFor();
-    if ((await label()) !== 'frame 1 of 2') problems.push(`anim label before use: ${await label()}`);
-    const lastFrame = await canvas();
-    await page.getByRole('button', { name: 'Previous animation frame' }).click();
     await page.locator('#anim-label', { hasText: 'frame 0 of 2' }).waitFor();
-    if ((await canvas()) === lastFrame) problems.push('Previous animation frame did not change the canvas');
-    if ((await page.locator('#mode-replay').getAttribute('aria-pressed')) !== 'true') problems.push('animation control did not land in Replay');
-    await shot(page, 'anim-frame.png');
-    await page.getByRole('button', { name: 'Play animation' }).click();
+    const first = await canvas();
+    await shot(page, 'anim-auto.png');
     await page.locator('#anim-label', { hasText: 'frame 1 of 2' }).waitFor();
-    await page.getByRole('button', { name: 'Replay animation' }).waitFor();
-    if ((await canvas()) !== lastFrame) problems.push('animation did not end on the last frame');
-    await shot(page, 'anim-play.png');
+    if ((await canvas()) === first) problems.push('the animation did not change the canvas');
+    await page.waitForTimeout(2500);
+    if ((await label()) !== 'frame 1 of 2') problems.push(`animation looped or moved: ${await label()}`);
+    await shot(page, 'anim-end.png');
+    if (await page.getByRole('button', { name: /animation/i }).count()) problems.push('an animation button is still shown');
+
+    // Selecting the shown step again replays it.
+    await page.locator('#steplog button').nth(1).click();
+    await page.locator('#anim-label', { hasText: 'frame 0 of 2' }).waitFor();
+
+    // A live arrival plays from its first frame.
+    await page.locator('#mode-live').click();
+    await mcp(animSrv.url, 'act', { session_id: maze, action: 'ACTION4', reasoning: 'Live arrival.' });
+    await page.locator('#scrub-label', { hasText: 'step 2 of 2' }).waitFor();
+    await page.locator('#anim-label', { hasText: 'frame 0 of 2' }).waitFor();
+    await shot(page, 'anim-live.png');
+
+    // Replay Play advances onto an animated step and plays it.
     await page.locator('#steplog button').first().click();
-    await page.locator('#scrub-label', { hasText: 'step 0 of 1' }).waitFor();
-    if (!(await page.locator('#anim').isHidden())) problems.push('animation controls shown on a single-frame step');
+    await page.locator('#scrub-label', { hasText: 'step 0 of 2' }).waitFor();
+    await page.locator('#play').click();
+    await page.locator('#scrub-label', { hasText: 'step 1 of 2' }).waitFor();
+    await page.locator('#anim-label', { hasText: 'frame 0 of 2' }).waitFor();
+    await page.locator('#play').click();
+
+    await page.locator('#steplog button').first().click();
+    await page.locator('#scrub-label', { hasText: 'step 0 of 2' }).waitFor();
+    if (!(await page.locator('#anim').isHidden())) problems.push('animation line shown on a single-frame step');
     await shot(page, 'anim-single.png');
+
     await page.getByRole('button', { name: /Fake Anim/ }).click();
-    await page.locator('#anim:not([hidden])').waitFor();
-    await page.getByRole('button', { name: 'Previous animation frame' }).click();
     await page.locator('#anim-note', { hasText: 'frames 63-68 not stored' }).waitFor();
     await shot(page, 'anim-gap.png');
+
+    // The minimum interval still ends on the last frame: frames are dropped, not the end.
+    await page.locator('#steplog button').first().click();
+    await slider.fill('100');
+    await page.locator('#interval-value', { hasText: '100 ms' }).waitFor();
+    await page.locator('#steplog button').nth(1).click();
+    await page.locator('#anim-label', { hasText: 'frame 69 of 70' }).waitFor({ timeout: 1500 });
+    await slider.locator('xpath=ancestor::div[1]').screenshot({ path: path.join(OUT, 'interval-slider.png') });
   }, { viewport: { width: 1280, height: 900 } });
 } finally {
   await animSrv.close();

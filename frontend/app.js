@@ -6,7 +6,7 @@ import { createGrid } from './grid.js';
 import { hasRun, mergeNotes, noteFor, sourceOf } from './runs.js';
 import { safeHref } from './safeHref.js';
 import { END_REASONS, isNewerThanAll, renderSessions } from './sessions.js';
-import { DEFAULT_INTERVAL_MS, INTERVALS_MS, createPlayback } from './playback.js';
+import { DEFAULT_INTERVAL_MS, INTERVAL_MAX_MS, INTERVAL_MIN_MS, INTERVAL_STEP_MS, createPlayback } from './playback.js';
 import { createSettings } from './settings.js';
 import { createStepLog } from './steplog.js';
 
@@ -33,21 +33,32 @@ const state = {
   loading: false,
   pending: [],
   renderQueued: false,
+  dirtyStep: false, // a queued render needs the whole step view, not only the canvas
+  scrubbing: false, // the scrubber's input event is seeking: select without animating
 };
 
 // Owns the shown step and the Live/Replay mode; the render is rAF-coalesced.
+// onSelect is the only trigger of an animation (never renderStep, which runs
+// on every change).
 const playback = createPlayback({
   clock: { now: () => performance.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
   onChange: () => scheduleRender(),
+  onSelect: (i) => onSelected(state.steps[i] ?? null),
 });
 
-// Replays the shown step's animation frames; fetched on demand, so a step
-// without one costs nothing. Its changes render through the same coalescer.
+// Plays the selected step's frames across the interval; fetched on demand, so
+// a step without one costs nothing. Its changes redraw only the canvas.
 const anim = createAnimation({
-  clock: { setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
+  clock: { now: () => performance.now(), setTimeout: (f, ms) => setTimeout(f, ms), clearTimeout: (h) => clearTimeout(h) },
   fetchFrames: (n) => getJson(`api/sessions/${encodeURIComponent(state.selected)}/steps/${n}/frames`),
-  onChange: () => scheduleRender(),
+  onChange: () => scheduleRender(false),
 });
+
+// A scrub drag selects without animating or fetching; the settled position animates.
+function onSelected(step) {
+  anim.select(step, state.scrubbing ? 0 : playback.intervalMs);
+  if (!state.scrubbing) anim.prefetch(state.steps[playback.cursor + 1]);
+}
 
 const grid = createGrid($('grid'), $('hover'));
 const log = createStepLog($('steplog'), { onPick: (i) => playback.seek(i), noteOf: (step) => noteFor(state.notes, step) });
@@ -138,6 +149,7 @@ function renderControls() {
   $('prev').disabled = cursor <= 0;
   $('next').disabled = cursor >= count - 1;
   $('interval').value = String(playback.intervalMs);
+  $('interval-value').textContent = `${playback.intervalMs} ms`;
   const showBehind = mode === 'live' && behind > 0;
   $('behind').hidden = !showBehind;
   $('latest').hidden = !showBehind;
@@ -148,19 +160,20 @@ function renderAnim() {
   const box = $('anim');
   box.hidden = !anim.available;
   if (box.hidden) return;
-  const play = $('anim-play');
-  const text = anim.playing ? 'Pause animation' : anim.played ? 'Replay animation' : 'Play animation';
-  play.textContent = text;
-  play.setAttribute('aria-label', text);
   $('anim-label').textContent = anim.status === 'error' ? 'frames unavailable' : anim.status === 'loading' ? 'loading…' : anim.label;
   $('anim-note').textContent = anim.note;
 }
 
+// The canvas and the animation line: all an animation frame changes.
+function renderFrame() {
+  const step = state.steps[playback.cursor];
+  if (!anim.holding) grid.draw(anim.rows() ?? (step ? step.frame : null));
+  renderAnim();
+}
+
 function renderStep() {
   const step = state.steps[playback.cursor];
-  anim.show(step || null);
-  grid.draw(anim.rows() ?? (step ? step.frame : null));
-  renderAnim();
+  renderFrame();
   renderControls();
   $('scrub-label').textContent = step ? `step ${step.n} of ${state.steps.at(-1).n}` : '';
   if (step) {
@@ -222,13 +235,22 @@ function addStep(step) {
   }
 }
 
-// One render per animation frame however fast steps arrive.
-function scheduleRender() {
+// One render per display frame however fast steps or animation frames arrive.
+// Animation frames (full = false) skip renderStep, which rewrites the URL via
+// history.replaceState and would trip the browser's navigation throttling at
+// about 60 Hz.
+function scheduleRender(full = true) {
+  if (full) state.dirtyStep = true;
   if (state.renderQueued) return;
   state.renderQueued = true;
   requestAnimationFrame(() => {
     state.renderQueued = false;
-    renderStep();
+    if (state.dirtyStep) {
+      state.dirtyStep = false;
+      renderStep();
+    } else {
+      renderFrame();
+    }
   });
 }
 
@@ -383,24 +405,22 @@ async function applyRoute() {
 $('sessions-more').addEventListener('click', () => { loadOlder().catch(() => {}); });
 $('prev').addEventListener('click', () => playback.seek(playback.cursor - 1));
 $('next').addEventListener('click', () => playback.seek(playback.cursor + 1));
-$('scrub').addEventListener('input', (e) => playback.seek(Number(e.target.value)));
+// Dragging seeks with a still selection; the release (or each key step) animates.
+$('scrub').addEventListener('input', (e) => {
+  state.scrubbing = true;
+  try { playback.seek(Number(e.target.value)); } finally { state.scrubbing = false; }
+});
+$('scrub').addEventListener('change', (e) => playback.seek(Number(e.target.value)));
 $('mode-live').addEventListener('click', () => playback.setMode('live'));
 $('mode-replay').addEventListener('click', () => playback.setMode('replay'));
 $('play').addEventListener('click', () => (playback.playing ? playback.pause() : playback.play()));
-// An animation control lands in a paused Replay on the shown step first, so
-// Live cannot move the step mid-animation.
-const animControl = (fn) => () => { playback.seek(playback.cursor); fn(); };
-$('anim-play').addEventListener('click', animControl(() => (anim.playing ? anim.pause() : anim.play())));
-$('anim-prev').addEventListener('click', animControl(() => anim.stepBy(-1)));
-$('anim-next').addEventListener('click', animControl(() => anim.stepBy(1)));
 $('latest').addEventListener('click', () => playback.jumpToLatest());
-$('interval').addEventListener('change', (e) => playback.setIntervalMs(Number(e.target.value)));
-for (const ms of INTERVALS_MS) {
-  const o = el('option', '', `${ms} ms`);
-  o.value = String(ms);
-  $('interval').append(o);
-}
-$('interval').value = String(DEFAULT_INTERVAL_MS);
+const slider = $('interval');
+slider.min = String(INTERVAL_MIN_MS);
+slider.max = String(INTERVAL_MAX_MS);
+slider.step = String(INTERVAL_STEP_MS);
+slider.value = String(DEFAULT_INTERVAL_MS);
+slider.addEventListener('input', (e) => playback.setIntervalMs(Number(e.target.value)));
 window.addEventListener('popstate', applyRoute);
 
 let routed = false;
