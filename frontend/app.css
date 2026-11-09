@@ -92,7 +92,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .banner-fix { margin: 0.35rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
 
 .settings, .newgame { margin-bottom: 0.75rem; }
-.newgame select { display: block; max-width: 100%; margin-bottom: 0.4rem; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.6); padding: 0.3rem 0.5rem; }
+.newgame select, .newgame input[type=number] { display: block; max-width: 100%; margin-bottom: 0.4rem; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.6); padding: 0.3rem 0.5rem; }
 .newgame .check { display: block; }
 .newgame-message { margin: 0.25rem 0 0; color: var(--destructive); min-height: 1em; }
 .settings label { display: block; margin-bottom: 0.25rem; }

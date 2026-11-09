@@ -17,14 +17,31 @@ import { createRateLimiter, idleCloseAt, ONLINE_IDLE_CLOSE_MS, ONLINE_RPM_LIMIT,
 
 const SWEEP_MS = 60 * 1000;
 export const FINISHED = new Set(['WIN', 'GAME_OVER']);
-// A missing key is a legacy meta (stored under the old default): resets allowed.
-export const resetAllowed = (meta) => meta.allow_reset !== false;
-// The actions a session offers: a one-run session never offers RESET and
-// offers nothing once finished.
+// null max_resets = unlimited (legacy meta only).
+export const resetsRemaining = (meta) => (meta.max_resets === null ? null : Math.max(0, meta.max_resets - meta.resets_used));
+// The refusal a reset would get now, or null when it would be sent. A reset
+// never replays a won game, and one before any move on the level (the toolkit
+// would restart the whole game) is refused; the order matters.
+export function resetRefusal(meta, state = meta.last.state) {
+  if (state === 'WIN') return refuse('GAME_FINISHED', 'the game is won; a won game is never replayed: call end_session', { state });
+  if (resetsRemaining(meta) === 0) {
+    const reason = meta.max_resets === 0
+      ? 'this session allows no resets (max_resets 0, one run); keep playing, or end_session once the run is over'
+      : `this session's resets are used up (resets_used ${meta.resets_used} of max_resets ${meta.max_resets}); keep playing, or end_session once the run is over`;
+    return refuse('RESET_LIMIT', reason, { max_resets: meta.max_resets, resets_used: meta.resets_used });
+  }
+  if (meta.at_level_start) {
+    return refuse('RESET_UNNEEDED', state === 'GAME_OVER'
+      ? 'the game ended before any move on this level, so it cannot be reset (a reset would restart the whole game): call end_session'
+      : 'no move has been made on this level yet (it just started or was just reset): there is nothing to reset, and a reset now would restart the whole game, which sessions never do; make a move first', { state });
+  }
+  return null;
+}
+// The actions a session offers: RESET only where a reset would be admitted,
+// no ACTIONn once finished.
 export function visibleActions(meta, obs) {
-  const list = obs.available_actions || [];
-  if (resetAllowed(meta)) return list;
-  return FINISHED.has(obs.state) ? [] : list.filter((n) => n !== 0);
+  const offered = resetRefusal(meta, obs.state) === null;
+  return (obs.available_actions || []).filter((n) => (n === 0 ? offered : !FINISHED.has(obs.state)));
 }
 // Codes the sidecar may answer that pass through to the agent unchanged.
 const PASS_THROUGH = new Set(['TOOLKIT_TIMEOUT', 'TOOLKIT_ERROR', 'SIDECAR_EXITED', 'NETWORK_ERROR', 'RATE_LIMITED', 'SCORECARD_CLOSED', 'GAME_UNKNOWN', 'INVALID_ARGUMENT', 'SESSION_BUSY', 'TOOLKIT_NOT_READY']);
@@ -153,7 +170,13 @@ export function createSessions({
     // The animation is stored but never published: SSE and step pages carry the last frame only.
     await store.appendStep(id, { ...step, anim: obs.anim });
     const now = iso();
-    const next = await store.update(id, { step_count: n, last: lastSummary(obs), updated_at: now, last_activity_at: now, stalled: false });
+    // A level starts fresh after the open, a level reset or a level-up; the toolkit's reset
+    // then restarts the whole game, so the next one is refused (RESET_UNNEEDED).
+    const atLevelStart = action === 'START' || action === 'RESET' || obs.levels_completed > meta.last.levels_completed;
+    const next = await store.update(id, {
+      step_count: n, last: lastSummary(obs), updated_at: now, last_activity_at: now, stalled: false,
+      at_level_start: atLevelStart, ...(action === 'RESET' ? { resets_used: meta.resets_used + 1 } : {}),
+    });
     hub.publish('step', { session_id: id, step });
     publishSession(next);
     return { ok: true, meta: next, obs, prev, online: onlineInfo(next) };
@@ -276,11 +299,11 @@ export function createSessions({
       return r.ok ? { ok: true, games: r.games, ...(r.webUnavailable ? { web_unavailable: r.webUnavailable } : {}) } : r;
     },
 
-    async start({ game_id: gameId, online = false, allow_reset: allowReset = false }, caller) {
+    async start({ game_id: gameId, online = false, max_resets: maxResets = 0 }, caller) {
       const tk = toolkitGate();
       if (tk) return tk;
       if (typeof gameId !== 'string' || !GAME_ID_RE.test(gameId)) return refuse('INVALID_ARGUMENT', 'game_id is malformed');
-      if (typeof allowReset !== 'boolean') return refuse('INVALID_ARGUMENT', 'allow_reset must be a boolean');
+      if (!Number.isInteger(maxResets) || maxResets < 0) return refuse('INVALID_ARGUMENT', 'max_resets must be an integer >= 0');
       if (keyChanging) return refuse('TOOLKIT_NOT_READY', 'the API key is being changed; try again shortly', { state: 'reconfiguring' });
       if (liveCount() >= MAX_LIVE_SESSIONS) return refuse('TOO_MANY_SESSIONS', `at most ${MAX_LIVE_SESSIONS} live sessions; end_session one first`, { live: live().map((m) => m.id) });
       pendingStarts++;
@@ -315,7 +338,9 @@ export function createSessions({
           game_id: res.result.game_id || gameId,
           title,
           mode: online ? 'online' : 'local',
-          allow_reset: allowReset,
+          max_resets: maxResets,
+          resets_used: 0,
+          at_level_start: true,
           owner: isHuman(caller) ? { kind: 'human', sessionId: null, project: null } : { kind: 'agent', sessionId: caller?.sessionId ?? null, project: caller?.project ?? null },
           scorecard_id: card,
           scorecard_url: online ? scorecardUrl(card) : null,
@@ -371,8 +396,12 @@ export function createSessions({
       const { meta, r } = g;
       if (FINISHED.has(meta.last.state)) {
         const state = meta.last.state;
-        if (!resetAllowed(meta)) return refuse('GAME_FINISHED', `the game is in ${state} and this session was started with allow_reset:false: the run is over; call end_session`, { state, allow_reset: false });
-        return refuse('GAME_FINISHED', `the game is in ${state}; only reset or end_session`, { state });
+        if (state === 'WIN') return refuse('GAME_FINISHED', 'the game is won; call end_session', { state });
+        const remaining = resetsRemaining(meta);
+        const blocked = resetRefusal(meta);
+        return refuse('GAME_FINISHED', blocked
+          ? `the game is in ${state} and cannot be reset (${blocked.code}): the run is over; call end_session`
+          : `the game is in ${state}; reset (resets_remaining ${remaining ?? 'unlimited'}) or end_session`, { state, resets_remaining: remaining });
       }
       const n = Number(action.slice(6));
       if (!meta.last.available_actions.includes(n)) return refuse('ACTION_UNAVAILABLE', `${action} is not available now`, { available_actions: visibleActions(meta, meta.last).map(actionName) });
@@ -389,7 +418,8 @@ export function createSessions({
     async reset({ session_id: id, reasoning }, caller) {
       const g = gate(id, caller);
       if (g.refusal) return g.refusal;
-      if (!resetAllowed(g.meta)) return refuse('RESET_DISABLED', 'this session was started with allow_reset:false: one run, no resets; keep playing, or end_session once the run is over', { allow_reset: false });
+      const refused = resetRefusal(g.meta);
+      if (refused) return refused;
       if (reasoning !== undefined && (typeof reasoning !== 'string' || reasoning.length > REASONING_MAX_CHARS)) return refuse('INVALID_ARGUMENT', `reasoning must be a string of at most ${REASONING_MAX_CHARS} characters`);
       const sg = stepGates(id, g.meta);
       if (sg) return sg;
@@ -466,7 +496,7 @@ export function createSessions({
         scope,
         total: all.length,
         sessions: list.map((m) => ({
-          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, allow_reset: resetAllowed(m), status: m.status, end_reason: m.end_reason,
+          session_id: m.id, game_id: m.game_id, title: m.title, mode: m.mode, max_resets: m.max_resets, resets_used: m.resets_used, status: m.status, end_reason: m.end_reason,
           stalled: m.stalled, state: m.last?.state, levels_completed: m.last?.levels_completed, win_levels: m.last?.win_levels,
           step: m.step_count, owner: { kind: ownerKind(m), sessionId: m.owner?.sessionId ?? null, project: m.owner?.project ?? null }, updated_at: m.updated_at, ...(m.mode === 'online' ? { scorecard_url: m.scorecard_url } : {}),
         })),

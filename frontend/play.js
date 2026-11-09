@@ -7,6 +7,11 @@ const FINISHED_STATES = new Set(['WIN', 'GAME_OVER']);
 // A meta without owner.kind is a legacy (agent) session.
 export const isHumanSession = (meta) => meta?.owner?.kind === 'human';
 
+// Mirrors the server's resetRefusal (src/sessions.js): a reset is offered after
+// no win, with budget left (null max_resets is unlimited), once a move was made on the level.
+export const resetOffered = (meta) => meta.last?.state !== 'WIN' && !meta.at_level_start
+  && (meta.max_resets === null || meta.resets_used < meta.max_resets);
+
 // null unless the selected session is a live human one; else
 // {actions: ['ACTION1', …] (RESET and ACTION6's hint included only as offered), reset}.
 export function playable(meta) {
@@ -14,7 +19,7 @@ export function playable(meta) {
   const last = meta.last || {};
   const finished = FINISHED_STATES.has(last.state);
   const actions = finished ? [] : (last.available_actions || []).filter((n) => Number.isInteger(n) && n >= 1 && n <= 7).map((n) => `ACTION${n}`);
-  return { actions, reset: meta.allow_reset !== false };
+  return { actions, reset: resetOffered(meta) };
 }
 
 // Button labels: the key that sends each action.

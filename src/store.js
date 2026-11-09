@@ -118,6 +118,15 @@ async function lastLine(file) {
   }
 }
 
+// The one shape downstream sees: a legacy meta (no `max_resets`) maps
+// allow_reset:false to 0 resets and anything else to null (unlimited; only a
+// legacy meta has it). `resets_used` is not reconstructed from steps.
+export function upgradeMeta(meta) {
+  if ('max_resets' in meta) return meta;
+  const { allow_reset: allowReset, ...rest } = meta;
+  return { ...rest, max_resets: allowReset === false ? 0 : null, resets_used: 0, at_level_start: false };
+}
+
 export function createStore({ dataDir, log = console }) {
   const sessionsDir = path.join(dataDir, 'sessions');
   const metas = new Map();
@@ -155,6 +164,7 @@ export function createStore({ dataDir, log = console }) {
           continue;
         }
         if (!meta || meta.id !== id) continue;
+        meta = upgradeMeta(meta);
         if (meta.status === 'live') {
           // Toolkit environments don't survive a backend restart.
           meta = { ...meta, status: 'ended', end_reason: 'backend_restart', stalled: false };

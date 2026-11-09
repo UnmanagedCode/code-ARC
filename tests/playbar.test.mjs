@@ -14,7 +14,7 @@ class El {
 globalThis.document = { createElement: (tag) => new El(tag) };
 const { createPlayBar } = await import('../frontend/playbar.js');
 
-const meta = (id, over = {}) => ({ id, status: 'live', allow_reset: true, owner: { kind: 'human' }, last: { state: 'NOT_FINISHED', available_actions: [1, 5, 6] }, ...over });
+const meta = (id, over = {}) => ({ id, status: 'live', max_resets: 1, resets_used: 0, at_level_start: false, owner: { kind: 'human' }, last: { state: 'NOT_FINISHED', available_actions: [1, 5, 6] }, ...over });
 const LIVE = { mode: 'live', behind: 0 };
 
 function setup() {
@@ -138,4 +138,22 @@ test('keys are not claimed in Replay', () => {
   const e = key('ArrowUp');
   bar.key(e);
   assert.equal(e.prevented, false);
+});
+
+// Pins: Reset and R follow resetOffered: hidden, and R sends nothing, when a reset would be refused.
+test('Reset is hidden and R sends nothing when no reset is offered; offered, both work', async () => {
+  const { bar, byText, sent } = setup();
+  bar.update(meta('s-a', { at_level_start: true }), LIVE);
+  assert.equal(byText(/^Reset/).hidden, true);
+  const r = key('r');
+  bar.key(r);
+  await tick();
+  assert.equal(sent.length, 0);
+  bar.update(meta('s-a'), LIVE);
+  assert.equal(byText(/^Reset/).hidden, false);
+  bar.key(key('r'));
+  await tick();
+  assert.match(sent[0], /s-a\/reset$/);
+  await byText(/^Reset/).click();
+  assert.match(sent[1], /s-a\/reset$/);
 });

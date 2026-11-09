@@ -16,13 +16,13 @@ export function createNewGame(panel, toggle, { onStarted }) {
   const onlineLabel = el('label', { for: 'newgame-online', class: 'check' });
   onlineLabel.append(online, ' Online (arcprize.org)');
   const onlineNote = el('p', { class: 'muted' }, "Local mode runs the game's code on this machine; online runs it on arcprize.org.");
-  const resets = el('input', { id: 'newgame-resets', type: 'checkbox' });
-  const resetsLabel = el('label', { for: 'newgame-resets', class: 'check' });
-  resetsLabel.append(resets, ' Allow resets');
+  const resetsLabel = el('label', { for: 'newgame-resets' }, 'Resets allowed');
+  const resets = el('input', { id: 'newgame-resets', type: 'number', min: '0', step: '1', value: '0' });
+  const resetsNote = el('p', { class: 'muted' }, '0 = one run; each reset restarts the current level');
   const start = el('button', { type: 'button' }, 'Start');
   const notice = el('p', { class: 'muted' });
   const message = el('p', { class: 'newgame-message', role: 'alert' });
-  panel.append(heading, gameLabel, select, onlineLabel, onlineNote, resetsLabel, start, notice, message);
+  panel.append(heading, gameLabel, select, onlineLabel, onlineNote, resetsLabel, resets, resetsNote, start, notice, message);
 
   async function load() {
     message.textContent = '';
@@ -44,7 +44,7 @@ export function createNewGame(panel, toggle, { onStarted }) {
     start.disabled = true;
     message.textContent = '';
     try {
-      const r = await sendJson('api/sessions', 'POST', { game_id: select.value, online: online.checked, allow_reset: resets.checked });
+      const r = await sendJson('api/sessions', 'POST', { game_id: select.value, online: online.checked, max_resets: Number.isNaN(resets.valueAsNumber) ? null : resets.valueAsNumber });
       if (r.status === 200) {
         panel.hidden = true;
         toggle.setAttribute('aria-expanded', 'false');

@@ -67,7 +67,7 @@ test('sourceOf: a human step', () => {
 });
 
 const human = (over = {}) => ({
-  id: 's-1', status: 'live', allow_reset: true, owner: { kind: 'human', sessionId: null, project: null },
+  id: 's-1', status: 'live', max_resets: 1, resets_used: 0, at_level_start: false, owner: { kind: 'human', sessionId: null, project: null },
   last: { state: 'NOT_FINISHED', available_actions: [1, 2, 6], ...over },
 });
 
@@ -86,10 +86,14 @@ test('playable: controls follow ownership, status, finish state and the resets f
   assert.equal(playable({ ...human(), status: 'ended' }), null);
   assert.deepEqual(playable(human({ state: 'GAME_OVER' })).actions, []);
   assert.deepEqual(playable(human({ state: 'WIN' })).actions, []);
-  assert.equal(playable({ ...human(), allow_reset: false }).reset, false);
-  const legacyResets = human();
-  delete legacyResets.allow_reset;
-  assert.equal(playable(legacyResets).reset, true, 'a missing allow_reset is a legacy session: resets allowed');
+  const reset = (over, last) => playable({ ...human(last), ...over }).reset;
+  assert.equal(reset({ max_resets: 0 }), false, 'a one-run session');
+  assert.equal(reset({ resets_used: 1 }), false, 'budget used up');
+  assert.equal(reset({ at_level_start: true }), false, 'no move on the level yet');
+  assert.equal(reset({}, { state: 'WIN' }), false, 'a won game is never replayed');
+  assert.equal(reset({}), true, 'budget left');
+  assert.equal(reset({}, { state: 'GAME_OVER' }), true, 'budget left after GAME_OVER');
+  assert.equal(reset({ max_resets: null, resets_used: 9 }), true, 'unlimited (legacy)');
   assert.deepEqual(playable(human({ available_actions: [0, 1, 8] })).actions, ['ACTION1'], 'RESET and out-of-range ids are never actions');
   assert.equal(playable(undefined), null);
 });

@@ -26,14 +26,14 @@
 
 ## Play a game yourself
 
-**New game** (top right) opens a picker: choose a game, optionally **Online (arcprize.org)** (local mode runs the game's code on this machine) and **Allow resets** (off = one run), then **Start**. The new session is selected and gets a play bar under the frame. You play only sessions you started here; agents' sessions stay watch-only, and agents cannot act on yours (they can observe it).
+**New game** (top right) opens a picker: choose a game, optionally **Online (arcprize.org)** (local mode runs the game's code on this machine) and **Resets allowed** (a number: `0` = one run; each reset restarts the current level), then **Start**. The new session is selected and gets a play bar under the frame. You play only sessions you started here; agents' sessions stay watch-only, and agents cannot act on yours (they can observe it).
 
 | Control | Key |
 |---|---|
 | Action 1–4 | ↑ ↓ ← → or W S A D |
 | Action 5 | Space, when no button or link has focus |
 | Action 7 | Z |
-| Reset (only with resets allowed) | R |
+| Reset (shown while a reset is available: budget left, a move made on the level, not after a win) | R |
 | Action 6 | click a cell of the frame (sends its `x,y`) |
 | End | button; the first click arms it ("Confirm end"), the second ends the session |
 
@@ -56,7 +56,7 @@
 - **Animations:** an action can animate (`frame_count > 1`); `frame` is always the last frame. An agent adds `animation:"all"` to `act`, or calls `observe` with `animation:"all"` and the `animation_step` from the `act` result, to get the frames: the first full, each later one a diff against the frame before, a page at a time (`truncated` and `next_from` say how to continue). With `frame:"image"` it gets one contact-sheet PNG of numbered tiles instead. Past `ANIMATION_FRAMES_MAX` frames a step stores the first ones and the last (the result says which indexes are missing); steps recorded earlier have only their last frame. Details: [protocol.md](protocol.md) → Animation.
 - **Board images:** `frame:"image"` on `act`, `reset` or `observe` writes the frame as a PNG (palette colours, optional dashed grid with labelled coordinates every few cells) and returns its path; the agent opens it with Read. An image shows layout, shapes and symmetry for a fraction of a full text frame's tokens; text frames stay the way to read exact cells. Scripts get the same picture with `frame:"image"` and read the PNG path from `frame.path`. Options and file lifecycle: [protocol.md](protocol.md) → Board image.
 - `online:true` on `start_session` plays against arcprize.org with a real scorecard (link in the result and the viewer). Rate limits and idle closes are reported as refusals, never retried silently.
-- **One-run sessions:** Sessions are one run by default: every reset is refused (`RESET_DISABLED`); `allow_reset:true` on `start_session` allows resets. After `GAME_OVER` or a full win a one-run session stays live until `end_session`. The viewer marks a resettable session with a "Resets" badge, and shows a "Resets: on" / "Resets: off (one run)" header fact. The `play-arc` skill forbids learning a game from its source, bundles or toolkit internals.
+- **Reset budget:** Sessions are one run by default (`max_resets` 0): every reset is refused (`RESET_LIMIT`). `max_resets:n` on `start_session` allows `n` level resets: a reset restarts the current level, never the whole game, and a won game is never replayed. A reset before any move on the level is refused (`RESET_UNNEEDED`). After `GAME_OVER` with no resets left, or after a win, a session stays live until `end_session`. The viewer shows a "Resets u/m" badge on sessions with a budget (`u/∞` for a legacy unlimited one) and a "Resets: none (one run)" / "Resets: u/m used" header fact. The `play-arc` skill forbids learning a game from its source, bundles or toolkit internals.
 - The tools serve cc's two result formats: json is the complete data (for `run_code` programs, via cc's REST alias), text is prose for agents; `list_sessions` text pages with `offset`, json lists every session. Contracts: [protocol.md](protocol.md) → MCP tools.
 - Only the agent session that started a game can act on or end it; anyone can observe.
 - **Agent scripting:** for sweeps, searches or replaying a route, an agent uses cc's `run_code`: a program calls `cc.code_arc.note` (what it tries and why), then `cc.code_arc.act`/`reset`, branches on the json results and returns a digest. Its steps go through the same checks and log as tool steps, recorded as scripted under the latest note. Each session takes at most `STEP_RATE_MAX` steps per `STEP_RATE_WINDOW_MS` and `SESSION_STEPS_MAX` steps in all (`src/limits.js`). `run_code` is unavailable for a session whose project lives on a remote System. Contracts: [scripted-play.md](scripted-play.md).

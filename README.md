@@ -21,7 +21,7 @@ Standalone (no cc): `CONDUCTOR_PLUGIN_DATA_DIR=/abs/data/dir PORT=8791 node serv
 | What | Default | Where it lives |
 |---|---|---|
 | Play mode | Local (toolkit NORMAL mode: games downloaded and run locally, in-memory scorecard) | `start_session` `online:true` opts one session into arcprize.org ONLINE mode |
-| Resets | off (one run: reset refused `RESET_DISABLED`) | `start_session` `allow_reset:true` opts one session in |
+| Resets | `0` (one run: reset refused `RESET_LIMIT`); level resets only, never after a `WIN` | `start_session` `max_resets:n` gives one session n level resets |
 | Frame returned by `act` | changed rows only (`diff`) | `frame` argument |
 | Animation returned by `act`/`observe` | last frame only; the `animation` argument adds at most `ANIMATION_PAGE_MAX` frames per call | `animation` argument; `src/limits.js` |
 | Live sessions | capped | `MAX_LIVE_SESSIONS` in `src/limits.js` |

@@ -87,7 +87,7 @@ The directories and files the plugin itself creates are 0700 / 0600: the data di
 
 ```
 secrets.json                 {arcApiKey}
-sessions/<sid>/meta.json     session meta (atomic writes)
+sessions/<sid>/meta.json     session meta (atomic writes); `init()` normalizes a legacy meta in memory at load (`upgradeMeta` in `src/store.js`; see protocol.md → Session meta)
 sessions/<sid>/steps.jsonl   one step per line, append-only; frames as `frame_z`, an animation's leading frames as `anim_z`
 sessions/<sid>/notes.jsonl   one script run note per line, append-only
 images/<sid>/step-<n>-<seq>.png  newest board image of a live session (0600); removed at session end, all of images/ at start

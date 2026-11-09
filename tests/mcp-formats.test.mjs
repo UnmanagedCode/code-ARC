@@ -36,7 +36,7 @@ test('golden path in both formats, tool by tool', async (t) => {
   const gamesText = prose(await mcpText('list_games'));
   for (const g of games.games) assert.ok(gamesText.includes(g.game_id), g.game_id);
 
-  const start = ok(await mcp('start_session', { game_id: 'fake-maze', allow_reset: true }));
+  const start = ok(await mcp('start_session', { game_id: 'fake-maze', max_resets: 2 }));
   assert.ok(noOkKey(start));
   const sid = start.session_id;
   const startText = prose(await mcpText('start_session', { game_id: 'fake-maze' }, { sessionId: 'agent-b', project: 'p' }));
@@ -55,6 +55,7 @@ test('golden path in both formats, tool by tool', async (t) => {
 
   const reset = ok(await mcp('reset', { session_id: sid }));
   assert.ok(noOkKey(reset));
+  ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
   assert.ok(prose(await mcpText('reset', { session_id: sid })).includes(sid));
   const obs = ok(await mcp('observe', { session_id: sid }));
   assert.ok(noOkKey(obs));
@@ -133,7 +134,7 @@ test('list_sessions: json returns every session, text pages with offset', async 
     const id = `s-${String(i).padStart(12, '0')}`;
     const at = new Date(Date.UTC(2026, 0, 1, 0, 0, i)).toISOString();
     await app.store.create({
-      id, game_id: 'fake-maze', title: 'Fake Maze', mode: 'local', owner: { sessionId: 'agent-a', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
+      id, game_id: 'fake-maze', title: 'Fake Maze', mode: 'local', max_resets: 0, resets_used: 0, at_level_start: false, owner: { sessionId: 'agent-a', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
       status: 'ended', end_reason: 'ended_by_agent', stalled: false, created_at: at, updated_at: at, last_activity_at: at, step_count: 0,
       last: { state: 'NOT_FINISHED', levels_completed: 0, win_levels: 3, available_actions: [1], frame_count: 1, full_reset: false },
     });
@@ -174,8 +175,9 @@ test('refusals are identical in both formats and carry their extras under detail
   const limited = await both('act', { session_id: sid, action: 'ACTION1' }, 'STEP_RATE_LIMITED');
   assert.ok(Number.isInteger(limited.details.retry_after_ms) && limited.details.retry_after_ms > 0);
 
-  const sid2 = await startGame(mcp, 'fake-maze', { allow_reset: false });
-  assert.equal((await both('reset', { session_id: sid2 }, 'RESET_DISABLED')).details.allow_reset, false);
+  const sid2 = await startGame(mcp, 'fake-maze');
+  ok(await mcp('act', { session_id: sid2, action: 'ACTION1' }));
+  assert.deepEqual((await both('reset', { session_id: sid2 }, 'RESET_LIMIT')).details, { max_resets: 0, resets_used: 0 });
   const unavailable = await both('act', { session_id: sid2, action: 'ACTION5' }, 'ACTION_UNAVAILABLE');
   assert.ok(Array.isArray(unavailable.details.available_actions));
   assert.equal((await both('act', { session_id: 's-ffffffffffff', action: 'ACTION1' }, 'SESSION_UNKNOWN')).details, undefined);
@@ -185,7 +187,8 @@ test('refusals are identical in both formats and carry their extras under detail
   assert.match(misplaced.error, /frame:'image'/);
 
   await both('observe', { session_id: sid2, image_scale: 8 }, 'INVALID_ARGUMENT');
-  const sid3 = await startGame(mcp, 'fake-maze', { allow_reset: true });
+  const sid3 = await startGame(mcp, 'fake-maze', { max_resets: 1 });
+  ok(await mcp('act', { session_id: sid3, action: 'ACTION1' }));
   await app.store.update(sid3, { step_count: SESSION_STEPS_MAX });
   await both('reset', { session_id: sid3 }, 'SESSION_STEP_LIMIT');
 
@@ -231,13 +234,13 @@ test('end_session warnings are returned in json and named in text', async (t) =>
   assert.match(text, new RegExp(`warning ${j.warnings[0].code}: `));
 });
 
-test('text always states allow_reset in observations; list_sessions text marks only allow_reset:true', async (t) => {
+test('text always states the reset budget in observations; list_sessions text marks only sessions with resets', async (t) => {
   const { mcp, mcpText } = await startApp(t, FAST);
   const off = await startGame(mcp, 'fake-maze');
-  const on = await startGame(mcp, 'fake-maze', { allow_reset: true });
-  assert.match(prose(await mcpText('observe', { session_id: off })), /allow_reset: false \(one run; reset is refused\)/);
-  assert.match(prose(await mcpText('observe', { session_id: on })), /allow_reset: true/);
+  const on = await startGame(mcp, 'fake-maze', { max_resets: 2 });
+  assert.match(prose(await mcpText('observe', { session_id: off })), /max_resets 0 \(one run; reset is refused\)/);
+  assert.match(prose(await mcpText('observe', { session_id: on })), /max_resets 2 · resets_used 0 · resets_remaining 2/);
   const lines = prose(await mcpText('list_sessions')).split('\n');
-  assert.match(lines.find((l) => l.includes(on)), /allow_reset:true/);
-  assert.doesNotMatch(lines.find((l) => l.includes(off)), /allow_reset/);
+  assert.match(lines.find((l) => l.includes(on)), /resets 0\/2/);
+  assert.doesNotMatch(lines.find((l) => l.includes(off)), /resets/);
 });

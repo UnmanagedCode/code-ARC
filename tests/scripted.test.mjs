@@ -25,7 +25,7 @@ const ended = (app, sid) => app.store.get(sid).status === 'ended';
 // run only once a note opened one; START and direct service calls are tagged too.
 test('source attribution: text steps are tool steps, json steps are script steps under the latest note', async (t) => {
   const { app, url, mcp, mcpText } = await startApp(t);
-  const sid = await start(mcp, { allow_reset: true });
+  const sid = await start(mcp, { max_resets: 2 });
   ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
   assert.equal((await mcpText('act', { session_id: sid, action: 'ACTION1' })).text.startsWith('Session'), true);
   assert.equal((await mcpText('reset', { session_id: sid })).text.startsWith('Session'), true);
@@ -167,7 +167,7 @@ test(`TOO_MANY_NOTES past ${NOTES_MAX} notes; json steps still play under the la
 test(`step rate: ${STEP_RATE_MAX} per window across notes and json and text steps`, async (t) => {
   const clock = fakeClock();
   const { mcp, mcpText, calls } = await startApp(t, { clock, timers: manualTimers });
-  const sid = await start(mcp, { allow_reset: true });
+  const sid = await start(mcp, { max_resets: 1 });
   ok(await mcp('note', { session_id: sid, note: 'burst' })); // 1
   for (let i = 1; i < STEP_RATE_MAX - 1; i++) ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
   await mcpText('act', { session_id: sid, action: 'ACTION1' }); // 20
@@ -184,7 +184,8 @@ test(`step rate: ${STEP_RATE_MAX} per window across notes and json and text step
 
 test(`SESSION_STEP_LIMIT at ${SESSION_STEPS_MAX} steps, in both formats`, async (t) => {
   const { app, mcp, mcpText, calls } = await startApp(t);
-  const sid = await start(mcp, { allow_reset: true });
+  const sid = await start(mcp, { max_resets: 1 });
+  ok(await mcp('act', { session_id: sid, action: 'ACTION1' }));
   await app.store.update(sid, { step_count: SESSION_STEPS_MAX });
   const before = await stepCalls(calls);
   refusal(await mcp('act', { session_id: sid, action: 'ACTION1' }), 'SESSION_STEP_LIMIT');

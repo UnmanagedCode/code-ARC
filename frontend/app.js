@@ -121,7 +121,7 @@ function renderHeader() {
     el('span', 'fact', `Mode: ${s.mode}`),
     el('span', 'fact muted', s.game_id),
   );
-  facts.append(el('span', 'fact', s.allow_reset !== false ? 'Resets: on' : 'Resets: off (one run)'));
+  facts.append(el('span', 'fact', s.max_resets === 0 ? 'Resets: none (one run)' : s.max_resets === null ? `Resets: ${s.resets_used} used (unlimited)` : `Resets: ${s.resets_used}/${s.max_resets} used`));
   const badges = el('div', 'badges');
   if (isHumanSession(s)) badges.append(badge('Human play', 'owner-human'));
   if (s.status === 'live') badges.append(badge(s.stalled ? 'Stalled: waiting for the toolkit' : 'Live', s.stalled ? 'status-stalled' : 'status-live'));

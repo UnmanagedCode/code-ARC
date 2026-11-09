@@ -11,7 +11,7 @@ export async function captureDefaults(t, extra = {}) {
   const norm = (v) => JSON.parse(JSON.stringify(v).split(env.dataDir).join('<DATA>').replace(/s-[0-9a-f]{12}/g, '<SID>'));
   const out = {};
   for (const [fmt, call] of [['json', mcp], ['text', mcpText]]) {
-    const start = await call('start_session', { game_id: 'fake-maze', allow_reset: true });
+    const start = await call('start_session', { game_id: 'fake-maze', max_resets: 1 });
     const sid = start.structured?.session_id || /s-[0-9a-f]{12}/.exec(start.text)[0];
     out[`${fmt}/start`] = norm(start);
     for (const frame of FRAMES) {
