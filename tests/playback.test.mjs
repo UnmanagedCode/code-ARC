@@ -368,3 +368,18 @@ test('the default interval lies on the slider grid', () => {
   assert.ok(INTERVAL_MIN_MS <= DEFAULT_INTERVAL_MS && DEFAULT_INTERVAL_MS <= INTERVAL_MAX_MS);
   assert.equal((DEFAULT_INTERVAL_MS - INTERVAL_MIN_MS) % INTERVAL_STEP_MS, 0);
 });
+
+// Pins: the order holds for every selection path, not only seek.
+test('onSelect runs before onChange for Replay Play ticks and Live arrivals', () => {
+  const { clock, pb, events } = setup();
+  pb.load(3, 0, 'replay');
+  pb.play();
+  events.length = 0;
+  clock.advance(I);
+  assert.deepEqual(events.slice(0, 2), ['select:1:1', 'change'], 'Replay Play tick');
+  pb.load(1, 0, 'live');
+  clock.advance(2000);
+  events.length = 0;
+  pb.append();
+  assert.deepEqual(events.slice(0, 2), ['select:1:1', 'change'], 'Live arrival tick');
+});

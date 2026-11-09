@@ -119,13 +119,15 @@ test('frame dropping: stored gap, wakes no sooner than FRAME_MIN_MS, shown index
   anim.select(step(1, 70), 100);
   await flush();
   for (let t = 0; t < 130; t++) clock.advance(1);
-  assert.ok(clock.delays.every((d) => d >= FRAME_MIN_MS), `delays ${clock.delays}`);
+  // Every wake waits a display frame, except the final one, clamped to the window end.
+  assert.ok(clock.delays.slice(0, -1).every((d) => d >= FRAME_MIN_MS), `delays ${clock.delays}`);
   for (const [now, index] of seen) {
     const slot = now >= 100 ? 69 : Math.floor((now * 70) / 100);
     const expected = Math.max(...stored.filter((i) => i <= slot));
     if (now > 0) assert.equal(index, expected, `at ${now} ms`);
   }
   assert.equal(anim.label, 'frame 69 of 70');
+  assert.ok(seen.find(([, index]) => index === 69)[0] <= 100, 'the last frame is shown by t0 + D');
   assert.ok(changes() <= Math.ceil(100 / FRAME_MIN_MS) + 2, `${changes()} changes`);
   assert.equal(anim.note, 'frames 63-68 not stored');
 });
@@ -265,4 +267,81 @@ test('labels use the toolkit index across a gap, and the note says what is missi
   one.anim.select(step(1, 2), 500);
   await flush();
   assert.equal(one.anim.note, 'earlier frames not recorded');
+});
+
+// Invariant: the last frame is drawn before the window ends, i.e. before the
+// next selection (at t0 + D) cancels the timer (R4); also at long frame counts.
+test('the last frame is shown before t0 + D even when the minimum wait would overshoot', async () => {
+  for (const [frames, ms] of [[70, 100], [200, 500]]) {
+    const { anim, clock } = setup(() => Promise.resolve(all(frames)));
+    anim.select(step(1, frames), ms);
+    await flush();
+    clock.advance(ms - 1);
+    assert.equal(anim.label, `frame ${frames - 1} of ${frames}`, `${frames} frames in ${ms} ms`);
+    assert.equal(clock.pending(), 0);
+  }
+});
+
+const dataP = (prefix, indexes, frameCount) => ({
+  frame_count: frameCount, stored: indexes.length, omitted: frameCount - indexes.length,
+  frames: indexes.map((index) => ({ index, rows: [`${prefix}${index}`] })),
+});
+
+// Invariant: a fetch result or timeout of an older selection never touches the newer one (token guards).
+function twoSlowSteps(clock) {
+  const pend = {};
+  const { anim } = setup((n) => new Promise((resolve, reject) => { pend[n] = { resolve, reject }; }));
+  return { anim, pend };
+}
+const ownsB = (anim) => {
+  assert.equal(anim.holding, true, 'B still holds');
+  assert.equal(anim.rows(), null);
+  assert.equal(anim.status, 'loading');
+  assert.equal(anim.note, '');
+  assert.equal(anim.label, 'frame 3 of 4');
+};
+
+test('a stale fetch success of step A does not show on step B', async () => {
+  const { anim, pend } = twoSlowSteps();
+  anim.select(step(1, 3), 500);
+  anim.select(step(2, 4), 500);
+  pend[1].resolve(dataP('a', [0, 2], 3)); // omitted: its note must not leak either
+  await flush();
+  ownsB(anim);
+  pend[2].resolve(dataP('b', [0, 1, 2, 3], 4));
+  await flush();
+  assert.deepEqual(anim.rows(), ['b0']);
+  assert.equal(anim.status, 'ready');
+});
+
+test('a stale fetch error of step A does not mark step B as failed', async () => {
+  const { anim, pend } = twoSlowSteps();
+  anim.select(step(1, 3), 500);
+  anim.select(step(2, 4), 500);
+  pend[1].reject(new Error('HTTP 500'));
+  await flush();
+  ownsB(anim);
+  pend[2].resolve(dataP('b', [0, 1, 2, 3], 4));
+  await flush();
+  assert.deepEqual(anim.rows(), ['b0']);
+});
+
+test('a stale hold timeout of step A does not end step B\'s hold', () => {
+  // A clock that lets cleared timers fire anyway, so only the guard can stop them.
+  let t = 0;
+  const timers = [];
+  const clock = {
+    now: () => t,
+    setTimeout: (fn, ms) => { timers.push({ at: t + ms, fn }); return timers.length; },
+    clearTimeout: () => {},
+  };
+  const anim = createAnimation({ clock, fetchFrames: () => new Promise(() => {}), onChange: () => {} });
+  const run = (to) => { t = to; for (const x of timers.filter((x) => x.at <= to && !x.done)) { x.done = true; x.fn(); } };
+  anim.select(step(1, 3), 500);
+  run(300);
+  anim.select(step(2, 4), 500); // B's window ends at 800
+  run(600); // A's timeout (500) fires now
+  ownsB(anim);
+  run(800);
+  assert.equal(anim.holding, false, 'B\'s own timeout still ends its hold');
 });

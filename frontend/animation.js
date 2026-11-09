@@ -66,7 +66,8 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
     const total = data.frame_count;
     const last = data.frames.length - 1;
     const elapsed = clock.now() - t0;
-    const slot = elapsed >= duration ? total - 1 : Math.floor((elapsed * total) / duration);
+    // Within 1 ms of the end counts as the end: the final wake is clamped below.
+    const slot = elapsed >= duration - 1 ? total - 1 : Math.floor((elapsed * total) / duration);
     let at = Math.max(pos, 0);
     while (at < last && data.frames[at + 1].index <= slot) at++;
     if (at !== pos) {
@@ -75,7 +76,10 @@ export function createAnimation({ clock, fetchFrames, onChange }) {
     }
     if (at >= last) return;
     const due = t0 + (data.frames[at + 1].index * duration) / total;
-    timer = clock.setTimeout(advance, Math.max(FRAME_MIN_MS, Math.ceil(due - clock.now())));
+    // Never later than 1 ms before the window ends, even if that is sooner than
+    // FRAME_MIN_MS: the next selection (at t0 + duration) cancels this timer.
+    const wait = Math.max(FRAME_MIN_MS, Math.ceil(due - clock.now()));
+    timer = clock.setTimeout(advance, Math.min(wait, Math.max(0, t0 + duration - 1 - clock.now())));
   }
 
   function play(got) {
