@@ -62,12 +62,9 @@ export function readJsonBody(req, maxBytes = BODY_MAX_BYTES) {
   });
 }
 
-// Non-GET requests must be same-origin JSON: a JSON content type (a form or a
-// no-cors fetch can't send one), and no cross-site Sec-Fetch-Site; without
-// that header, no Origin either.
-export function crossSiteGuard(req) {
-  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-  if (type !== 'application/json') return new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'content-type must be application/json');
+// A request must not be cross-site: no cross-site Sec-Fetch-Site; without that
+// header, no Origin either.
+export function sameOriginGuard(req) {
   const site = req.headers['sec-fetch-site'];
   if (site !== undefined) {
     if (site !== 'same-origin' && site !== 'none') return new HttpError(403, 'CROSS_SITE', 'cross-site request refused');
@@ -75,6 +72,14 @@ export function crossSiteGuard(req) {
     return new HttpError(403, 'CROSS_SITE', 'request with an Origin but no Sec-Fetch-Site refused');
   }
   return null;
+}
+
+// Non-GET requests must also be JSON: a form or a no-cors fetch can't send
+// that content type.
+export function crossSiteGuard(req) {
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type !== 'application/json') return new HttpError(415, 'UNSUPPORTED_MEDIA_TYPE', 'content-type must be application/json');
+  return sameOriginGuard(req);
 }
 
 // Routes: [method, pattern, handler]; pattern is a string path or a RegExp

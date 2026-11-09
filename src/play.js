@@ -3,7 +3,7 @@
 // gate and limit applies unchanged. The caller is HUMAN (src/sessions.js).
 // A person acts only on sessions they started; the service's `admit` enforces it.
 import manifest from '../conductor.plugin.json' with { type: 'json' };
-import { HttpError, readJsonBody, sendJson } from './http.js';
+import { HttpError, readJsonBody, sameOriginGuard, sendJson } from './http.js';
 import { SESSION_ID_RE } from './limits.js';
 import { validate } from './schema.js';
 import { HUMAN, refusalBody } from './sessions.js';
@@ -54,7 +54,10 @@ export function createPlayRoutes({ sessions }) {
     reply(res, await sessions[method]({ session_id: params.id, ...args }, HUMAN), ok);
   }];
   return [
+    // A GET with side effects (it may start the sidecar and call arcprize.org): same-origin only.
     ['GET', '/api/games', async (req, res) => {
+      const blocked = sameOriginGuard(req);
+      if (blocked) throw blocked;
       const r = await sessions.listGames();
       reply(res, r, ({ ok: _ok, ...rest }) => rest);
     }],

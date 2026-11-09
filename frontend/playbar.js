@@ -3,7 +3,7 @@
 // control is off unless the view is Live, and a frame click also needs the
 // shown step to be the latest. Requests go one at a time.
 import { sendJson } from './api.js';
-import { KEY_HINTS, actionForKey, playable } from './play.js';
+import { KEY_HINTS, actionForKey, onControl, playable } from './play.js';
 
 const el = (tag, attrs = {}, text) => {
   const n = document.createElement(tag);
@@ -21,6 +21,7 @@ export function createPlayBar(container) {
   let busy = false;
   let armed = false; // End waits for a second click
   let message = '';
+  let catchingUp = false; // `message` is the transient "Catching up" hint
 
   const buttons = new Map();
   const actions = el('div', { class: 'play-actions', role: 'group', 'aria-label': 'Actions' });
@@ -59,6 +60,7 @@ export function createPlayBar(container) {
       return;
     }
     const live = mode === 'live';
+    if (!live) armed = false;
     for (const [a, b] of buttons) {
       b.disabled = !live || busy || !p.actions.includes(a);
       b.hidden = false;
@@ -67,7 +69,7 @@ export function createPlayBar(container) {
     reset.disabled = !live || busy;
     end.disabled = !live || busy;
     end.textContent = armed ? 'Confirm end' : 'End';
-    clickHint.hidden = !p.actions.includes('ACTION6');
+    clickHint.hidden = !live || !p.actions.includes('ACTION6');
     hint.textContent = live ? '' : 'Replay — switch to Live to play';
     status.textContent = message;
   }
@@ -84,14 +86,19 @@ export function createPlayBar(container) {
     armed = false;
     busy = true;
     message = '';
+    catchingUp = false;
+    const id = meta.id;
     render();
+    let outcome = '';
     try {
-      const r = await sendJson(`api/sessions/${encodeURIComponent(meta.id)}/${path}`, 'POST', body);
-      message = r.status === 200 ? '' : refusalText(r);
+      const r = await sendJson(`api/sessions/${encodeURIComponent(id)}/${path}`, 'POST', body);
+      outcome = r.status === 200 ? '' : refusalText(r);
     } catch (e) {
-      message = `Request failed: ${e.message}`;
+      outcome = `Request failed: ${e.message}`;
     } finally {
       busy = false;
+      // A reply for a session no longer selected is never shown under another.
+      if (meta?.id === id) message = outcome;
       render();
     }
   }
@@ -100,9 +107,18 @@ export function createPlayBar(container) {
 
   return {
     update(nextMeta, view) {
+      if (nextMeta?.id !== meta?.id) {
+        armed = false;
+        message = '';
+        catchingUp = false;
+      }
       meta = nextMeta;
       mode = view.mode;
       behind = view.behind;
+      if (catchingUp && behind === 0) {
+        message = '';
+        catchingUp = false;
+      }
       render();
     },
     // A keydown; handled keys are claimed so the page doesn't scroll and a
@@ -112,8 +128,11 @@ export function createPlayBar(container) {
       if (!p) return;
       const action = actionForKey(e);
       if (!action) return;
-      e.preventDefault();
-      if (action === 'RESET' ? !p.reset : !p.actions.includes(action)) return;
+      const offered = action === 'RESET' ? p.reset : p.actions.includes(action);
+      // Claim a key only when it plays, or when it would scroll the page and
+      // focus is not on a control.
+      if (offered || !onControl(e)) e.preventDefault();
+      if (!offered) return;
       if (action === 'RESET') send('reset', {});
       else act(action);
     },
@@ -123,6 +142,7 @@ export function createPlayBar(container) {
       if (!p || !p.actions.includes('ACTION6') || busy) return;
       if (behind > 0) {
         message = 'Catching up — click when the frame is current';
+        catchingUp = true;
         render();
         return;
       }

@@ -22,11 +22,17 @@ export const KEY_HINTS = Object.freeze({ ACTION1: '↑ / W', ACTION2: '↓ / S',
 
 const KEYS = { arrowup: 'ACTION1', w: 'ACTION1', arrowdown: 'ACTION2', s: 'ACTION2', arrowleft: 'ACTION3', a: 'ACTION3', arrowright: 'ACTION4', d: 'ACTION4', ' ': 'ACTION5', z: 'ACTION7', r: 'RESET' };
 
+const TYPING = 'input, select, textarea, [contenteditable]';
+const CONTROL = 'button, a[href], summary, [role=button], [role=link]';
+export const onControl = (e) => Boolean(e.target?.closest?.(`${TYPING}, ${CONTROL}`));
+
 // The action a keydown means, or null. One press is one action (a held key's
-// repeats are ignored, keeping it off the step budget); modified presses and
-// typing into a form control are not play.
+// repeats are ignored, keeping it off the step budget); Ctrl/Meta/Alt presses
+// and typing into a form control are not play (Shift is: caps lock still
+// plays). Space on a focused button or link is that control's own activation.
 export function actionForKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return null;
-  if (e.target?.closest?.('input, select, textarea, [contenteditable]')) return null;
+  if (e.target?.closest?.(TYPING)) return null;
+  if (e.key === ' ' && onControl(e)) return null;
   return KEYS[String(e.key).toLowerCase()] ?? null;
 }

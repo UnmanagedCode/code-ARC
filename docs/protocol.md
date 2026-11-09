@@ -159,7 +159,7 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
 | `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting; 409 `KEY_CHANGE_IN_PROGRESS` while another key change is being saved. Error bodies are `{error, code}`; `error` is the reason to show the user |
 | `DELETE api/settings/api-key` | clears → `{apiKey}`; the same 409s |
-| `GET api/games` | human play: `{games, web_unavailable?}` (= `list_games` json); refusals as below |
+| `GET api/games` | human play: `{games, web_unavailable?}` (= `list_games` json); refusals as below. Same-origin only (403 `CROSS_SITE`, the `Sec-Fetch-Site`/`Origin` rules above, without the content-type rule): it can start the sidecar and call arcprize.org |
 | `POST api/sessions` | human play: start a session ([Human play routes](#human-play-routes)) |
 | `POST api/sessions/:id/act` | human play: one action |
 | `POST api/sessions/:id/reset` | human play: reset |

@@ -248,3 +248,18 @@ test('a live human session blocks an API key change', async (t) => {
   const r = await sendJsonReq(`${url}/api/settings/api-key`, 'PUT', { key: 'abcdefghijklmnop' });
   assert.deepEqual([r.status, r.body.code], [409, 'SESSIONS_ACTIVE']);
 });
+
+// Pins: GET api/games has side effects (sidecar, arcprize.org), so a cross-site
+// request is refused before any toolkit call; the view's own same-origin fetch passes.
+test('GET api/games refuses cross-site requests without touching the toolkit', async (t) => {
+  const { url, calls, app } = await startApp(t);
+  for (const headers of [{ 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, { origin: 'http://evil.example' }]) {
+    const r = await json(`${url}/api/games`, { headers });
+    assert.deepEqual([r.status, r.body.code], [403, 'CROSS_SITE'], JSON.stringify(headers));
+  }
+  assert.deepEqual(await calls(), []);
+  assert.equal(app.sidecar.status().running, false);
+  for (const headers of [{ 'sec-fetch-site': 'same-origin' }, { 'sec-fetch-site': 'none' }, {}]) {
+    assert.equal((await json(`${url}/api/games`, { headers })).status, 200, JSON.stringify(headers));
+  }
+});
