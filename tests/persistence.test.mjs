@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { deflateRawSync } from 'node:zlib';
 import { randomBytes } from 'node:crypto';
-import { createStore } from '../src/store.js';
+import { createStore, upgradeMeta } from '../src/store.js';
 import { ANIMATION_FRAMES_MAX } from '../src/limits.js';
 import { freshEnv, json, ok, refusal, sendJsonReq, startApp, startGame } from './_helpers.mjs';
 
@@ -134,40 +134,83 @@ test('a tampered frame_z is bounded and read as frame:null: inflate bomb, oversi
   assert.equal((await json(`${second.url}/api/health`)).status, 200);
 });
 
-test('allow_reset:false persists and survives a restart', async (t) => {
+test('max_resets and resets_used persist and survive a restart', async (t) => {
   const env = await freshEnv(t);
   const first = await startApp(t, { env });
-  const sid = await startGame(first.mcp, 'fake-maze', { allow_reset: false });
+  const sid = await startGame(first.mcp, 'fake-maze', { max_resets: 2 });
+  ok(await first.mcp('act', { session_id: sid, action: 'ACTION1' }));
+  ok(await first.mcp('reset', { session_id: sid }));
   await first.close();
 
   const second = await startApp(t, { env });
   const meta = second.app.store.get(sid);
-  assert.equal(meta.allow_reset, false);
+  assert.deepEqual([meta.max_resets, meta.resets_used], [2, 1]);
   assert.equal(meta.end_reason, 'backend_restart');
+  const file = JSON.parse(await fs.readFile(path.join(env.dataDir, 'sessions', sid, 'meta.json'), 'utf8'));
+  assert.deepEqual([file.max_resets, file.resets_used, 'allow_reset' in file], [2, 1, false]);
   const listed = ok(await second.mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === sid);
-  assert.equal(listed.allow_reset, false);
-  assert.equal(ok(await second.mcp('observe', { session_id: sid })).allow_reset, false);
+  assert.deepEqual([listed.max_resets, listed.resets_used], [2, 1]);
+  const obs = ok(await second.mcp('observe', { session_id: sid }));
+  assert.deepEqual([obs.max_resets, obs.resets_used, obs.resets_remaining], [2, 1, 1]);
 });
 
-test('a legacy meta without allow_reset reads as resets allowed', async (t) => {
-  const env = await freshEnv(t);
-  const id = 's-000000000001';
+const legacyMeta = (id, extra = {}) => {
   const t0 = new Date(Date.UTC(2026, 0, 1)).toISOString();
-  const meta = {
+  return {
     id, game_id: 'fake-maze', title: 'Legacy', mode: 'local',
     owner: { sessionId: 'agent-a', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
     status: 'ended', end_reason: 'ended_by_agent', stalled: false, created_at: t0, updated_at: t0, last_activity_at: t0,
     step_count: 0, last: { state: 'NOT_FINISHED', levels_completed: 0, win_levels: 2, available_actions: [1], frame_count: 1, full_reset: true },
+    ...extra,
   };
-  const file = path.join(env.dataDir, 'sessions', id, 'meta.json');
+};
+const writeMeta = async (env, meta) => {
+  const file = path.join(env.dataDir, 'sessions', meta.id, 'meta.json');
   await fs.mkdir(path.dirname(file), { recursive: true });
   await fs.writeFile(file, JSON.stringify(meta));
+  return file;
+};
+
+test('a legacy meta without max_resets reads as unlimited; the file is left untouched', async (t) => {
+  const env = await freshEnv(t);
+  const id = 's-000000000001';
+  const file = await writeMeta(env, legacyMeta(id));
+  const before = await fs.readFile(file, 'utf8');
   const { mcp, mcpText, url } = await startApp(t, { env });
-  assert.equal(ok(await mcp('observe', { session_id: id })).allow_reset, true);
-  assert.match((await mcpText('observe', { session_id: id })).text, /allow_reset: true/);
-  assert.equal(ok(await mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === id).allow_reset, true);
-  assert.equal('allow_reset' in (await json(`${url}/api/sessions/${id}`)).body, false);
-  assert.equal('allow_reset' in JSON.parse(await fs.readFile(file, 'utf8')), false);
+  const obs = ok(await mcp('observe', { session_id: id }));
+  assert.deepEqual([obs.max_resets, obs.resets_used, obs.resets_remaining], [null, 0, null]);
+  assert.match((await mcpText('observe', { session_id: id })).text, /max_resets unlimited/);
+  assert.equal(ok(await mcp('list_sessions', { scope: 'all' })).sessions.find((s) => s.session_id === id).max_resets, null);
+  const api = (await json(`${url}/api/sessions/${id}`)).body;
+  assert.deepEqual([api.max_resets, 'allow_reset' in api], [null, false]);
+  assert.equal(await fs.readFile(file, 'utf8'), before);
+});
+
+test('a legacy allow_reset:false meta reads as max_resets 0', async (t) => {
+  const env = await freshEnv(t);
+  const id = 's-000000000002';
+  await writeMeta(env, legacyMeta(id, { allow_reset: false }));
+  const { mcp } = await startApp(t, { env });
+  const obs = ok(await mcp('observe', { session_id: id }));
+  assert.deepEqual([obs.max_resets, obs.resets_remaining], [0, 0]);
+});
+
+test('a legacy live meta is rewritten ended and normalized', async (t) => {
+  const env = await freshEnv(t);
+  const id = 's-000000000003';
+  const file = await writeMeta(env, legacyMeta(id, { status: 'live', end_reason: null, allow_reset: true }));
+  await startApp(t, { env });
+  const stored = JSON.parse(await fs.readFile(file, 'utf8'));
+  assert.deepEqual([stored.status, stored.max_resets, stored.resets_used, 'allow_reset' in stored], ['ended', null, 0, false]);
+});
+
+test('upgradeMeta: false is 0, true or missing is null (unlimited), a new meta is unchanged', () => {
+  const base = { id: 'x' };
+  assert.deepEqual(upgradeMeta({ ...base, allow_reset: false }), { id: 'x', max_resets: 0, resets_used: 0, at_level_start: false });
+  assert.deepEqual(upgradeMeta({ ...base, allow_reset: true }), { id: 'x', max_resets: null, resets_used: 0, at_level_start: false });
+  assert.deepEqual(upgradeMeta(base), { id: 'x', max_resets: null, resets_used: 0, at_level_start: false });
+  const fresh = { ...base, max_resets: 3, resets_used: 1, at_level_start: true };
+  assert.equal(upgradeMeta(fresh), fresh);
 });
 
 // --- animation frames (anim_z) ---------------------------------------------

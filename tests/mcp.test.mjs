@@ -18,7 +18,7 @@ test('golden path: list, start, move, ACTION6, observe, reset, end', async (t) =
   const games = ok(await mcp('list_games'));
   assert.ok(games.games.some((g) => g.game_id === 'fake-maze'));
 
-  const start = ok(await mcp('start_session', { game_id: 'fake-maze', allow_reset: true }));
+  const start = ok(await mcp('start_session', { game_id: 'fake-maze', max_resets: 1 }));
   const sid = start.session_id;
   assert.match(sid, /^s-[0-9a-f]{12}$/);
   assert.equal(start.mode, 'local');
@@ -118,20 +118,24 @@ test('gating refusals', async (t) => {
   assert.equal((await calls()).filter((c) => c.op === 'step').length, stepsBefore, 'refusals never reach the toolkit');
 });
 
-test('GAME_FINISHED after a win; reset still works with allow_reset:true', async (t) => {
+test('GAME_FINISHED after a win: act and reset are refused, never replayed, nothing offered', async (t) => {
   const { mcp, calls } = await startApp(t);
-  const sid = await startGame(mcp, 'fake-maze', { allow_reset: true });
+  const sid = await startGame(mcp, 'fake-maze', { max_resets: 5 });
   for (const a of ['ACTION4', 'ACTION4', 'ACTION4']) await mcp('act', { session_id: sid, action: a });
   let last;
   for (const a of ['ACTION2', 'ACTION2', 'ACTION2']) last = await mcp('act', { session_id: sid, action: a });
   assert.equal(ok(last).state, 'WIN');
   assert.equal(ok(last).levels_completed, 2);
+  assert.deepEqual(ok(last).available_actions, []);
   const steps = (await calls()).filter((c) => c.op === 'step').length;
+  const resets = (await calls()).filter((c) => c.op === 'reset').length;
   refusal(await mcp('act', { session_id: sid, action: 'ACTION1' }), 'GAME_FINISHED');
   assert.equal((await calls()).filter((c) => c.op === 'step').length, steps);
-  const reset = await mcp('reset', { session_id: sid });
-  assert.equal(ok(reset).state, 'NOT_FINISHED');
-  assert.equal(ok(reset).full_reset, true);
+  const refused = refusal(await mcp('reset', { session_id: sid }), 'GAME_FINISHED');
+  assert.deepEqual(refused.details, { state: 'WIN' });
+  assert.equal((await calls()).filter((c) => c.op === 'reset').length, resets, 'no toolkit reset call');
+  const obs = ok(await mcp('observe', { session_id: sid }));
+  assert.deepEqual([obs.resets_used, obs.available_actions], [0, []]);
 });
 
 test(`TOO_MANY_SESSIONS past ${MAX_LIVE_SESSIONS} live sessions`, async (t) => {
@@ -191,7 +195,7 @@ const PNG_SIGNATURE = '\x89PNG';
 
 test('image results carry a path, never pixels; the file is the stored frame at the defaults', async (t) => {
   const { mcp, app, env } = await startApp(t, { stepRate: { max: 1000, windowMs: 1000 } });
-  const sid = await startGame(mcp, 'fake-maze', { allow_reset: true });
+  const sid = await startGame(mcp, 'fake-maze', { max_resets: 1 });
   const raw = {
     act: await mcp('act', { session_id: sid, action: 'ACTION4', frame: 'image' }),
     reset: await mcp('reset', { session_id: sid, frame: 'image' }),

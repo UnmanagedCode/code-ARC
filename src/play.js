@@ -10,7 +10,7 @@ import { HUMAN, refusalBody } from './sessions.js';
 import { observationFields } from './observation.js';
 
 const INPUT = new Map(manifest.mcp.tools.map((t) => [t.name, t.inputSchema]));
-const KEYS = { start_session: ['game_id', 'online', 'allow_reset'], act: ['action', 'x', 'y'], reset: [], end_session: [] };
+const KEYS = { start_session: ['game_id', 'online', 'max_resets'], act: ['action', 'x', 'y'], reset: [], end_session: [] };
 
 // A refusal's HTTP status; every code not listed is a state conflict.
 const REFUSAL_STATUS = {

@@ -4,7 +4,9 @@ Mirrors the real signatures the sidecar calls (Arcade, make, step, reset,
 create_scorecard, close_scorecard) and the real failure shapes: calls return
 None and log with exc_info, HTTP errors carry `.response.status_code/.text`,
 and the message formats match what the live service produced. Plain lists
-replace numpy.
+replace numpy. `reset` mirrors arcengine: a full reset (score 0, level 1) when
+the game is won or no move was made on the current level (`actions` is zeroed
+on every level start), else a level reset.
 
 Every call is appended to `calls.jsonl` in the cwd so tests can assert what
 reached the toolkit. The API key is recorded as its sha256 only.
@@ -20,7 +22,7 @@ Games:
   fake-anim   fake-maze, but ACTION1 answers 70 frames (a marker walks along row 1
               of each leading frame; the last is the board), over both frame caps.
   fake-hang   step blocks forever.
-  fake-slow   step answers after 0.4 s (a late reply).
+  fake-slow   step, and a reset after the open, answer after 0.4 s (a late reply).
   fake-crash  step kills the process (exit 3).
   fake-noisy  step prints to stdout, including a protocol-shaped line.
   fake-429    step fails with HTTP 429.
@@ -202,10 +204,15 @@ class _Wrapper:
         self.scorecard_id = scorecard_id
         self.logger = arcade.logger
         self.game = _Game(info.game_id)
+        # Like arcengine's `_action_count`: zeroed on every level start, so a
+        # reset with no move on the level restarts the whole game.
         self.actions = 0
+        self.total_actions = 0  # the scorecard's count; only a full reset zeroes it
         self.resets = 0
         self._last: Optional[FrameDataRaw] = None
+        self._ready = False
         self.reset()
+        self._ready = True
 
     @property
     def observation_space(self) -> Optional[FrameDataRaw]:
@@ -241,13 +248,17 @@ class _Wrapper:
         _record({"op": "reset", "game_id": self.environment_info.game_id})
         if not self._online_net("/api/cmd/RESET"):
             return None
+        if self._ready and self.behaviour == "fake-slow":
+            time.sleep(0.4)
         full = self.actions == 0 or self.game.state == GameState.WIN
         if full:
             self.game.full()
             self.actions = 0
+            self.total_actions = 0
         else:
             self.game.player = (2, 2)
             self.game.state = GameState.NOT_FINISHED
+            self.actions = 0
         self.resets += 1
         return self._obs([self.game.grid()], full_reset=full)
 
@@ -287,6 +298,7 @@ class _Wrapper:
             o.state = g.state
             return o
         self.actions += 1
+        self.total_actions += 1
         if action.value in MOVES:
             dx, dy = MOVES[action.value]
             old = g.player
@@ -297,6 +309,7 @@ class _Wrapper:
             if g.level < len(GOALS) and g.player == GOALS[g.level]:
                 g.level += 1
                 g.player = (2, 2)
+                self.actions = 0
                 if g.level == len(GOALS):
                     g.state = GameState.WIN
             if gid == "fake-lose" and action.value == 3 and g.state == GameState.NOT_FINISHED:
@@ -326,7 +339,7 @@ class _Scorecard:
             environments.append({
                 "id": w.environment_info.game_id,
                 "score": 50.0 * w.game.level,
-                "actions": w.actions,
+                "actions": w.total_actions,
                 "levels_completed": w.game.level,
                 "completed": w.game.state == GameState.WIN,
                 "level_count": len(GOALS),

@@ -21,12 +21,12 @@ The tables below give each tool's json `structured` fields; the text view of eac
 | Tool | Arguments | `structured` (json view) |
 |---|---|---|
 | `list_games` | — | `{games:[{game_id, title, tags, downloaded, source}], web_unavailable?}`; `source` is `bundle` (from the offline bundle, [bundle.md](bundle.md)) or `web`; `web_unavailable: {code, detail}` is present when, with a bundle, the web game list failed or is still loading (the text view says only the bundle's games are listed); a failed game-list fetch without a bundle is a refusal (`NETWORK_ERROR`, `RATE_LIMITED`, `TOOLKIT_ERROR`), never an empty list |
-| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `allow_reset` (default `false` = one run: every `reset` is refused `RESET_DISABLED`; `true` allows resets) | observation (first frame full) |
+| `start_session` | `game_id` (required; a listed id or its base before `-`), `online` (default `false`), `max_resets` (integer ≥ 0, default `0` = one run: every `reset` is refused `RESET_LIMIT`; `n` allows `n` level resets, never a replay of a won game) | observation (first frame full) |
 | `act` | `session_id`, `action` (`ACTION1`–`ACTION7`), `x`/`y` (ACTION6 only, `0`–`COORD_MAX`), `reasoning` (≤ `REASONING_MAX_CHARS`), `frame` (`diff` default, `full`, `none`, `image`), `image_scale`/`image_grid` (`frame:"image"` only; [Board image](#board-image)), `animation` (`last` default, `all`; [Animation](#animation)) | observation |
 | `reset` | `session_id`, `reasoning`, `frame` (`full` default, `diff`, `none`, `image`), `image_scale`/`image_grid` | observation |
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid`, `animation` (`last` default, `all`), `animation_step` (integer, `0`–`SESSION_STEPS_MAX`, default the latest step), `animation_from` (integer ≥ 0, default 0); the last two apply to `animation:"all"` only | observation from the stored last step; no toolkit call; with `animation:"all"` also the stored animation of `animation_step` ([Animation](#animation)) |
 | `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
-| `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry always carries `allow_reset` (boolean). json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
+| `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry always carries `max_resets` (integer; `null` = unlimited, legacy sessions only) and `resets_used` (integer). json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
 | `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
 
 Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `note` → a line naming the run opened.
@@ -39,20 +39,22 @@ Text view per tool: `list_games` → a line per game; observations → the obser
 
 ### Observation result
 
-json: `structured` is the object below. text: the same data as prose: a header line (`Session <id>: <game_id> "<title>" (<mode>, <status>)`), `state … · levels_completed a/b · step n`, `available_actions: …`, an `allow_reset: true|false` line (always), conditional lines (`full_reset`, `status ended (end_reason …)`, `online: scorecard_url … · idle_close_at …`), `frame_count n`, a frame line, then the labelled grid ([Frame text](#frame-text)). With `frame:"image"` the text gives `Board image: <path>, open it with Read.` (or why there is none) and the image is a file: a result never carries image bytes.
+json: `structured` is the object below. text: the same data as prose: a header line (`Session <id>: <game_id> "<title>" (<mode>, <status>)`), `state … · levels_completed a/b · step n`, `available_actions: …`, a reset-budget line (always: `max_resets 0 (one run; reset is refused)`, `max_resets m · resets_used u · resets_remaining r`, or `max_resets unlimited (legacy session) · resets_used u`), conditional lines (`full_reset`, `status ended (end_reason …)`, `online: scorecard_url … · idle_close_at …`), `frame_count n`, a frame line, then the labelled grid ([Frame text](#frame-text)). With `frame:"image"` the text gives `Board image: <path>, open it with Read.` (or why there is none) and the image is a file: a result never carries image bytes.
 
 | `structured` field | Meaning |
 |---|---|
 | `session_id`, `game_id`, `title` | `game_id` is the toolkit's resolved, versioned id |
 | `mode` | `local` or `online` |
-| `allow_reset` | boolean, always present; `false` = one run (every `reset` refused) |
+| `max_resets` | integer ≥ 0, or `null` = unlimited (legacy sessions only); always present; `0` = one run (every `reset` refused) |
+| `resets_used` | integer; successful resets so far, a late-applied one included (the START reset never counts) |
+| `resets_remaining` | `max_resets − resets_used` (≥ 0), `null` when unlimited |
 | `status` | `live` or `ended` (`end_reason` present when ended) |
 | `state` | `NOT_PLAYED`, `NOT_FINISHED`, `WIN`, `GAME_OVER` |
 | `levels_completed`, `win_levels` | progress |
-| `available_actions` | e.g. `["ACTION1","ACTION6"]`; on an `allow_reset:false` session never `RESET`, and `[]` in `WIN`/`GAME_OVER` |
+| `available_actions` | e.g. `["ACTION1","ACTION6"]`; `RESET` only when the toolkit lists it and a `reset` would be admitted (not after a `WIN`, with no resets left, or before any move on the level); never any `ACTIONn` in `WIN`/`GAME_OVER` |
 | `step` | `0` = start; increments per `act`/`reset` |
 | `frame_count` | frames the action produced; `frame` is the last one, the others come with `animation:"all"` ([Animation](#animation)) |
-| `full_reset` | the last reset restarted the whole game |
+| `full_reset` | the whole game restarted: true on the START observation, and on a reset only in the known cases under [Known limitations](#known-limitations) |
 | `frame` | by `mode`: `{mode:"full", rows}` (`rows`: hex row strings, `null` with no stored frame; plus `auto_full:true` when a `diff` was asked and there was no previous frame to compare); `{mode:"diff", changed_cells, bbox:{x0,y0,x1,y1}\|null, changed_rows:[{y, row}]}` (every changed row, however many); `{mode:"none"}`; for `frame:"image"`: `{mode:"image", path}` (absolute path of the PNG), `{mode:"image", unavailable:"no_frame"}` (no frame stored), `{mode:"image", unavailable:"session_ended"}` (it ended during the call), or `{mode:"image", error}` (the file could not be written; the action still happened). `changed_cells` = cells that differ between the previous step's last frame and this one's (animation frames in between are not counted); `bbox` = the smallest box (inclusive) covering every changed cell, status-bar cells included |
 | `online` | online sessions: `{scorecard_url, idle_close_at}` (ISO time) |
 | `animation` | only with `animation:"all"`: [Animation](#animation) |
@@ -109,7 +111,7 @@ An animating action returns several grids; `frame` always means the last one. `a
 
 `{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw).
 
-Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION` (view callers: `AGENT_SESSION`) → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, image options without `frame:"image"`, and animation options without `animation:"all"`, come before all of these.
+Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION` (view callers: `AGENT_SESSION`) → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `GAME_FINISHED` / `RESET_LIMIT` / `RESET_UNNEEDED` (in that order, from `resetRefusal` in `src/sessions.js`) after toolkit state, before `INVALID_ARGUMENT`. Schema refusals, image options without `frame:"image"`, and animation options without `animation:"all"`, come before all of these.
 
 | Code | When | `details` keys |
 |---|---|---|
@@ -124,8 +126,14 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION
 | `TOO_MANY_SESSIONS` | `MAX_LIVE_SESSIONS` live | `live` (ids) |
 | `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it (with a bundle and no network, games outside the bundle are not listed: a local start of one gets a `detail` saying the web game list could not be fetched) | `detail` (bundle case only) |
 | `ACTION_UNAVAILABLE` | action not in `available_actions` | `available_actions` |
-| `GAME_FINISHED` | non-RESET action in `WIN`/`GAME_OVER`; on an `allow_reset:false` session the reason says the run is over (call `end_session`) | `state` (plus `allow_reset:false` on such a session) |
-| `RESET_DISABLED` | any `reset` on an `allow_reset:false` session; never sent, no step recorded, no rate budget spent (online included). A finished online run left live is closed by the idle sweep after `ONLINE_IDLE_CLOSE_MS`, so `end_session` promptly | `allow_reset:false` |
+| `GAME_FINISHED` | an `act` in `WIN`/`GAME_OVER`, or a `reset` after a `WIN` (a won game is never replayed). The reason says `reset` or `end_session` after a `GAME_OVER` that a reset would be admitted for (`resets_remaining` in the reason), else that the run is over (call `end_session`) | `act`: `state`, `resets_remaining` (`null` = unlimited; none for a `WIN`); `reset`: `state:"WIN"` |
+| `RESET_LIMIT` | a `reset` with no resets left (`max_resets` 0 or used up) | `max_resets`, `resets_used` |
+| `RESET_UNNEEDED` | a `reset` before any move on the current level (right after START, a reset or a level-up): the toolkit would restart the whole game, which sessions never do. `GAME_OVER` before any move can only be ended | `state` |
+
+`GAME_FINISHED`, `RESET_LIMIT` and `RESET_UNNEEDED` on a `reset` are never sent to the toolkit, record no step and spend no rate budget (online included). A finished online run left live is closed by the idle sweep after `ONLINE_IDLE_CLOSE_MS`, so `end_session` promptly.
+
+| Code | When | `details` keys |
+|---|---|---|
 | `TOOLKIT_NOT_READY` | venv still being checked/installed (or stopped); or, for `start_session`, an API key change in progress (`state:"reconfiguring"`) | `state`, `phase` |
 | `TOOLKIT_UNAVAILABLE` | venv install failed, or the offline bundle was rejected ([bundle.md](bundle.md)) | `detail` (≤ `DETAIL_MAX`), `fix` |
 | `DEPS_DIVERGED` | worktree's symlinked `.venv` doesn't match its `requirements.txt` | `detail`, `fix` |
@@ -141,6 +149,11 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION
 | `SCORECARD_CLOSED` | arcprize.org no longer knows the game/scorecard; the session ends with `scorecard_auto_closed` | `detail` |
 
 `end_reason` values: `ended_by_agent`, `ended_by_user` (ended from the view), `scorecard_auto_closed`, `sidecar_exit`, `backend_restart`.
+
+### Known limitations
+
+- A game whose own code calls `set_level` zeroes the toolkit's move counter without a level-up: the reset is admitted, the toolkit restarts the whole game (`full_reset:true`) and the reset still counts.
+- One action that both completes a level and ends in `GAME_OVER` leaves `at_level_start` true: `reset` is refused `RESET_UNNEEDED` and the session can only be ended.
 
 ## HTTP API
 
@@ -170,11 +183,11 @@ Static files: an allowlist of `frontend/` files (`src/static.js`); everything el
 
 ### Human play routes
 
-The view starts and plays its own sessions through the same session-service methods as the MCP tools (`src/play.js`, `src/sessions.js`), so every gate and limit applies unchanged: live cap, `STEP_RATE_MAX`, `SESSION_STEPS_MAX`, `RESET_DISABLED`, toolkit state, the ONLINE limiter, key-change blocking. The caller is `HUMAN` (`source:"human"`); only these routes produce it (`handle` in `src/mcp.js` sets `source` from `format` alone, so a `caller.source` in an MCP body is ignored). Non-GET routes need the same-origin JSON guard above.
+The view starts and plays its own sessions through the same session-service methods as the MCP tools (`src/play.js`, `src/sessions.js`), so every gate and limit applies unchanged: live cap, `STEP_RATE_MAX`, `SESSION_STEPS_MAX`, `RESET_LIMIT`, `RESET_UNNEEDED`, toolkit state, the ONLINE limiter, key-change blocking. The caller is `HUMAN` (`source:"human"`); only these routes produce it (`handle` in `src/mcp.js` sets `source` from `format` alone, so a `caller.source` in an MCP body is ignored). Non-GET routes need the same-origin JSON guard above.
 
 | Route | Body (other keys → 400 `INVALID_ARGUMENT`) | 200 body |
 |---|---|---|
-| `POST api/sessions` | `{game_id, online?, allow_reset?}` (bounds from the `start_session` input schema) | the observation without `ok` and `frame`, plus `title` |
+| `POST api/sessions` | `{game_id, online?, max_resets?}` (bounds from the `start_session` input schema) | the observation without `ok` and `frame`, plus `title` |
 | `POST api/sessions/:id/act` | `{action, x?, y?}` (`ACTION1`–`ACTION7`; no `reasoning`, `frame` or `session_id`) | same observation body |
 | `POST api/sessions/:id/reset` | `{}` | same observation body |
 | `POST api/sessions/:id/end` | `{}` | `{session_id, game_id, steps, final, scorecard_url?, warnings?}` (= `end_session` json) |
@@ -190,15 +203,16 @@ The view starts and plays its own sessions through the same session-service meth
 | 429 | `STEP_RATE_LIMITED`, `RATE_LIMITED` |
 | 503 | `TOOLKIT_NOT_READY`, `TOOLKIT_UNAVAILABLE`, `DEPS_DIVERGED` |
 | 502 | `TOOLKIT_ERROR`, `TOOLKIT_TIMEOUT`, `SIDECAR_EXITED`, `NETWORK_ERROR` |
-| 409 (every other code) | `SESSION_ENDED`, `SESSION_BUSY`, `SESSION_STALLED`, `GAME_FINISHED`, `ACTION_UNAVAILABLE`, `RESET_DISABLED`, `TOO_MANY_SESSIONS`, `SESSION_STEP_LIMIT`, `SCORECARD_CLOSED` |
+| 409 (every other code) | `SESSION_ENDED`, `SESSION_BUSY`, `SESSION_STALLED`, `GAME_FINISHED`, `ACTION_UNAVAILABLE`, `RESET_LIMIT`, `RESET_UNNEEDED`, `TOO_MANY_SESSIONS`, `SESSION_STEP_LIMIT`, `SCORECARD_CLOSED` |
 
 - Human steps are recorded `source:"human"`; ending records `end_reason:"ended_by_user"`. The routes act only on sessions with `owner.kind:"human"` (`AGENT_SESSION` otherwise).
 
 ### Session meta
 
-`{id, game_id, title, mode, allow_reset, owner:{kind, sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
+`{id, game_id, title, mode, max_resets, resets_used, at_level_start, owner:{kind, sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
 
-- `allow_reset` is missing on legacy metas: read it as `true` (`api/sessions` and SSE serve the raw meta; tool outputs always carry the resolved boolean).
+- `max_resets` (integer ≥ 0), `resets_used` (integer, +1 per recorded `RESET` step) and `at_level_start` (boolean: the last recorded step was START, RESET, or raised `levels_completed`, so no move was made on the level yet) drive `resetRefusal`.
+- A legacy meta has no `max_resets`: at load `upgradeMeta` (`src/store.js`) maps `allow_reset:false` to `max_resets:0` and `allow_reset` true or missing to `null` (unlimited), sets `resets_used:0` (not reconstructed from steps) and `at_level_start:false`, and drops `allow_reset`. `null` occurs only that way. A meta that is not rewritten keeps its file untouched; `api/sessions` and SSE serve the normalized meta.
 
 ### Step
 

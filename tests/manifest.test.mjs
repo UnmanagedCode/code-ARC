@@ -139,3 +139,11 @@ test('ANIMATION_FRAMES_MAX equals the sidecar engine value', async () => {
   const py = await fs.readFile(path.join(ROOT, 'sidecar', 'engine.py'), 'utf8');
   assert.equal(Number(/^ANIMATION_FRAMES_MAX = (\d+)$/m.exec(py)?.[1]), ANIMATION_FRAMES_MAX);
 });
+
+test('start_session takes max_resets (integer >= 0, default 0) and no allow_reset; reset names neither', () => {
+  const m = tools.start_session.properties.max_resets;
+  assert.deepEqual([m.type, m.minimum, m.default], ['integer', 0, 0]);
+  assert.equal(tools.start_session.properties.allow_reset, undefined);
+  const reset = manifest.mcp.tools.find((t) => t.name === 'reset');
+  assert.doesNotMatch(reset.description, /allow_reset/);
+});

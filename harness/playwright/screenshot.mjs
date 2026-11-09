@@ -5,8 +5,8 @@
 //   settings.png       key saved, shown masked
 //   evil.png           a hostile game title rendered as text
 //   closed.png         an online session whose scorecard was closed
-//   no-reset.png       a default (one-run) session after GAME_OVER: header fact, no list badge
-//   resets.png         a resettable session: list badge and header fact
+//   no-reset.png       a default (one-run) session after GAME_OVER: header fact `Resets: none (one run)`, no list badge
+//   resets.png         a session with max_resets 2: `Resets 0/2` list badge and `Resets: 0/2 used` header fact
 //   deeplink.png       ?session=&step= routing
 //   dark.png           OS dark theme (standalone fallback tokens)
 //   banner.png         toolkit banner for a diverged venv, with its fix
@@ -21,11 +21,12 @@
 //   anim-single.png    the START step: no animation line
 //   anim-gap.png       a 70-frame step: only 64 stored, the not-stored note
 //   interval-slider.png the interval slider row at its minimum, showing its value
-//   human-newgame.png  the New game panel: Fake Maze picked, Allow resets ticked
-//   human-live.png     a started human session: enabled action buttons, Reset, End; the human badge
+//   human-newgame.png  the New game panel: Fake Maze picked, Resets allowed set to 2
+//   human-live.png     a started human session: enabled action buttons, End, Reset hidden until a move is made (then shown); the human badge
 //   human-click.png    ArrowRight then a click on cell (10,20): both steps logged as human
 //   human-replay.png   Replay: play controls disabled with the hint, a key press sends nothing
 //   human-over.png     a one-run game after GAME_OVER: actions disabled, no Reset
+//   human-reset-used.png a human game with max_resets 1 after its one reset and a move: `Resets: 1/1 used`, Reset hidden
 //   human-refused.png  Start refused at the live-session cap, the message shown
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
@@ -45,7 +46,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, name), fullP
 const srv = await bootArc();
 const problems = [];
 try {
-  const maze = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-maze', allow_reset: true }));
+  const maze = sessionId(await mcp(srv.url, 'start_session', { game_id: 'fake-maze', max_resets: 2 }));
   const moves = [
     ['ACTION4', 'Probing: ACTION4 probably moves the blue player right.'],
     ['ACTION4', 'Confirmed ACTION4 = right. The green cell at x=5 looks like a goal.'],
@@ -157,15 +158,15 @@ try {
 
     // Default (one-run) session: fact in the header, no badge in its list entry.
     await page.getByRole('button', { name: /Fake Lose/ }).click();
-    await page.locator('.fact', { hasText: 'Resets: off (one run)' }).waitFor();
+    await page.locator('.fact', { hasText: 'Resets: none (one run)' }).waitFor();
     if (await page.getByRole('button', { name: /Fake Lose/ }).locator('.badge.resets').count()) problems.push('one-run session shows a Resets badge');
     await page.locator('#steplog button', { hasText: 'ACTION3' }).waitFor();
     await shot(page, 'no-reset.png');
 
     // Resettable session: badge in the list, fact in the header.
     await page.getByRole('button', { name: /Fake Maze/ }).click();
-    await page.locator('.fact', { hasText: 'Resets: on' }).waitFor();
-    await page.getByRole('button', { name: /Fake Maze/ }).locator('.badge.resets', { hasText: 'Resets' }).waitFor();
+    await page.locator('.fact', { hasText: 'Resets: 0/2 used' }).waitFor();
+    await page.getByRole('button', { name: /Fake Maze/ }).locator('.badge.resets', { hasText: 'Resets 0/2' }).waitFor();
     await shot(page, 'resets.png');
 
     // Deep link to a step.
@@ -351,26 +352,27 @@ try {
     // 409 (the cap refusal) is expected below.
     page.on('response', (r) => { if (r.status() >= 400 && r.status() !== 409 && !/pluginBridge|pluginTheme/.test(r.url())) problems.push(`${r.status()} ${new URL(r.url()).pathname}`); });
     const logRows = () => page.locator('#steplog .step-head').allTextContents();
-    const startGame = async (game, resets) => {
+    const startGame = async (game, max) => {
       await page.locator('#newgame-toggle').click();
       await page.locator(`#newgame-game option[value="${game}"]`).waitFor({ state: 'attached' });
       await page.selectOption('#newgame-game', game);
-      await page.locator('#newgame-resets').setChecked(resets);
+      await page.locator('#newgame-resets').fill(String(max));
       return page.locator('#newgame-resets');
     };
     await page.goto(humanSrv.url);
-    await startGame('fake-maze', true);
+    await startGame('fake-maze', 2);
     await shot(page, 'human-newgame.png');
     await page.getByRole('button', { name: 'Start', exact: true }).click();
     await page.locator('#playbar:not([hidden])').waitFor();
     await page.locator('#session-list .badge.owner-human').waitFor();
     await page.locator('#steplog .step-head', { hasText: 'START' }).waitFor();
     if (await page.locator('#playbar button[data-action="ACTION4"]').isDisabled()) problems.push('ACTION4 is disabled on a live human session');
-    if (!(await page.locator('#playbar button[data-action="RESET"]').isVisible())) problems.push('Reset is not shown on a resettable session');
+    if (await page.locator('#playbar button[data-action="RESET"]').isVisible()) problems.push('Reset is shown before any move on the level');
     await shot(page, 'human-live.png');
 
     await page.keyboard.press('ArrowRight');
     await page.locator('#steplog .step-head', { hasText: /^#1 ACTION4/ }).waitFor();
+    if (!(await page.locator('#playbar button[data-action="RESET"]').isVisible())) problems.push('Reset is not shown after a move on a session with resets left');
     // A frame click needs the shown step to be the latest: wait out the pacing.
     await page.locator('#behind').waitFor({ state: 'hidden' });
     await page.locator('#scrub-label', { hasText: 'step 1 of 1' }).waitFor();
@@ -394,7 +396,7 @@ try {
     await shot(page, 'human-replay.png');
     await page.locator('#mode-live').click();
 
-    await startGame('fake-lose', false);
+    await startGame('fake-lose', 0);
     await page.getByRole('button', { name: 'Start', exact: true }).click();
     await page.locator('.game-title', { hasText: 'Fake Lose' }).waitFor();
     await page.locator('#playbar button[data-action="ACTION3"]:enabled').waitFor();
@@ -403,6 +405,22 @@ try {
     for (const b of await page.locator('#playbar .play-actions button').all()) if (!(await b.isDisabled())) problems.push('an action is enabled after GAME_OVER');
     if (await page.locator('#playbar button[data-action="RESET"]').isVisible()) problems.push('Reset is shown on a one-run session');
     await shot(page, 'human-over.png');
+
+    // One reset allowed: after it and a move, the fact reads 1/1 and Reset is gone.
+    await startGame('fake-maze', 1);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await page.locator('.fact', { hasText: 'Resets: 0/1 used' }).waitFor();
+    await page.locator('#playbar button[data-action="ACTION4"]:enabled').waitFor();
+    await page.keyboard.press('ArrowRight');
+    await page.locator('#playbar button[data-action="RESET"]:visible').waitFor();
+    await page.keyboard.press('r');
+    await page.locator('.fact', { hasText: 'Resets: 1/1 used' }).waitFor();
+    await page.locator('#steplog .step-head', { hasText: /^#2 reset/i }).waitFor();
+    await page.locator('#behind').waitFor({ state: 'hidden' });
+    await page.keyboard.press('ArrowRight');
+    await page.locator('#steplog .step-head', { hasText: /^#3 ACTION4/ }).waitFor();
+    if (await page.locator('#playbar button[data-action="RESET"]').isVisible()) problems.push('Reset is shown with the budget used up');
+    await shot(page, 'human-reset-used.png');
 
     // The agent's session is watch-only.
     const agentId = sessionId(await mcp(humanSrv.url, 'start_session', { game_id: 'fake-maze' }));
@@ -416,7 +434,7 @@ try {
       const r = await mcp(humanSrv.url, 'start_session', { game_id: 'fake-maze' });
       if (!r.text) break;
     }
-    await startGame('fake-maze', false);
+    await startGame('fake-maze', 0);
     await page.getByRole('button', { name: 'Start', exact: true }).click();
     await page.locator('.newgame-message', { hasText: 'TOO_MANY_SESSIONS' }).waitFor();
     await shot(page, 'human-refused.png');

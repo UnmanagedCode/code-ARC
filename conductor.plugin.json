@@ -104,10 +104,11 @@
               "default": false,
               "description": "Play against arcprize.org with a real scorecard instead of locally."
             },
-            "allow_reset": {
-              "type": "boolean",
-              "default": false,
-              "description": "true: reset allowed. Omitted or false: one run; reset is refused (RESET_DISABLED) for the whole session."
+            "max_resets": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "description": "Level resets this session may make (reset after GAME_OVER or mid-level). 0 (default): one run, reset refused (RESET_LIMIT). A won game is never replayed."
             }
           },
           "required": [
@@ -123,7 +124,9 @@
             "game_id",
             "title",
             "mode",
-            "allow_reset",
+            "max_resets",
+            "resets_used",
+            "resets_remaining",
             "status",
             "state",
             "levels_completed",
@@ -151,8 +154,14 @@
                 "online"
               ]
             },
-            "allow_reset": {
-              "type": "boolean"
+            "max_resets": {
+              "type": ["integer", "null"]
+            },
+            "resets_used": {
+              "type": "integer"
+            },
+            "resets_remaining": {
+              "type": ["integer", "null"]
             },
             "status": {
               "type": "string",
@@ -592,7 +601,9 @@
             "game_id",
             "title",
             "mode",
-            "allow_reset",
+            "max_resets",
+            "resets_used",
+            "resets_remaining",
             "status",
             "state",
             "levels_completed",
@@ -620,8 +631,14 @@
                 "online"
               ]
             },
-            "allow_reset": {
-              "type": "boolean"
+            "max_resets": {
+              "type": ["integer", "null"]
+            },
+            "resets_used": {
+              "type": "integer"
+            },
+            "resets_remaining": {
+              "type": ["integer", "null"]
             },
             "status": {
               "type": "string",
@@ -980,7 +997,7 @@
       },
       {
         "name": "reset",
-        "description": "Reset the game (the current level, or the whole game after a win). The only way to continue after GAME_OVER; refused (RESET_DISABLED) unless the session was started with allow_reset:true. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
+        "description": "Reset the current level (a level reset; never the whole game). Uses one of the session's max_resets; refused RESET_LIMIT when none remain, RESET_UNNEEDED before any move on the current level, GAME_FINISHED after a win. The only way to continue after GAME_OVER. frame defaults to 'full'. reasoning is shown live to the user. frame 'image' writes a PNG of the board and gives its file path; open it with Read.",
         "inputSchema": {
           "type": "object",
           "properties": {
@@ -1026,7 +1043,9 @@
             "game_id",
             "title",
             "mode",
-            "allow_reset",
+            "max_resets",
+            "resets_used",
+            "resets_remaining",
             "status",
             "state",
             "levels_completed",
@@ -1054,8 +1073,14 @@
                 "online"
               ]
             },
-            "allow_reset": {
-              "type": "boolean"
+            "max_resets": {
+              "type": ["integer", "null"]
+            },
+            "resets_used": {
+              "type": "integer"
+            },
+            "resets_remaining": {
+              "type": ["integer", "null"]
             },
             "status": {
               "type": "string",
@@ -1475,7 +1500,9 @@
             "game_id",
             "title",
             "mode",
-            "allow_reset",
+            "max_resets",
+            "resets_used",
+            "resets_remaining",
             "status",
             "state",
             "levels_completed",
@@ -1503,8 +1530,14 @@
                 "online"
               ]
             },
-            "allow_reset": {
-              "type": "boolean"
+            "max_resets": {
+              "type": ["integer", "null"]
+            },
+            "resets_used": {
+              "type": "integer"
+            },
+            "resets_remaining": {
+              "type": ["integer", "null"]
             },
             "status": {
               "type": "string",
@@ -2096,7 +2129,8 @@
                   "game_id",
                   "title",
                   "mode",
-                  "allow_reset",
+                  "max_resets",
+                  "resets_used",
                   "status",
                   "end_reason",
                   "stalled",
@@ -2121,8 +2155,11 @@
                       "online"
                     ]
                   },
-                  "allow_reset": {
-                    "type": "boolean"
+                  "max_resets": {
+                    "type": ["integer", "null"]
+                  },
+                  "resets_used": {
+                    "type": "integer"
                   },
                   "status": {
                     "type": "string",

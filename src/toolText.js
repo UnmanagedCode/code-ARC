@@ -32,7 +32,9 @@ export function observationText(o, frame, grid = '') {
     `state ${o.state} · levels_completed ${o.levels_completed}/${o.win_levels} · step ${o.step}`,
     `available_actions: ${list(o.available_actions)}`,
   ];
-  lines.push(o.allow_reset ? 'allow_reset: true' : 'allow_reset: false (one run; reset is refused)');
+  if (o.max_resets === 0) lines.push('max_resets 0 (one run; reset is refused)');
+  else if (o.max_resets === null) lines.push(`max_resets unlimited (legacy session) · resets_used ${o.resets_used}`);
+  else lines.push(`max_resets ${o.max_resets} · resets_used ${o.resets_used} · resets_remaining ${o.resets_remaining}`);
   if (o.full_reset) lines.push('full_reset: the whole game restarted');
   if (o.status === 'ended') lines.push(`status ended (end_reason ${o.end_reason})`);
   if (o.online) lines.push(`online: scorecard_url ${o.online.scorecard_url} · idle_close_at ${o.online.idle_close_at}`);
@@ -89,7 +91,8 @@ export function sessionsText(r, offset = 0) {
   for (const s of page) {
     const parts = [`- ${s.session_id} ${s.game_id} "${s.title}"`, s.mode, s.status];
     if (s.stalled) parts.push('stalled');
-    if (s.allow_reset) parts.push('allow_reset:true');
+    if (s.max_resets === null) parts.push('max_resets unlimited');
+    else if (s.max_resets > 0) parts.push(`resets ${s.resets_used}/${s.max_resets}`);
     if (s.end_reason) parts.push(`end_reason ${s.end_reason}`);
     if (s.state !== undefined) parts.push(`state ${s.state} · levels_completed ${s.levels_completed}/${s.win_levels}`);
     parts.push(`step ${s.step}`);

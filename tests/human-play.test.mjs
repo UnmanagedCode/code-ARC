@@ -36,7 +36,7 @@ test('api/games equals the list_games tool data', async (t) => {
 // observation without a frame.
 test('a person starts, acts (with coordinates), resets; steps are human', async (t) => {
   const { url, app, calls } = await startApp(t);
-  const started = await play(url, '/api/sessions', { game_id: 'fake-maze', allow_reset: true });
+  const started = await play(url, '/api/sessions', { game_id: 'fake-maze', max_resets: 1 });
   assert.equal(started.status, 200);
   const sid = started.body.session_id;
   assert.deepEqual(app.store.get(sid).owner, { kind: 'human', sessionId: null, project: null });
@@ -91,7 +91,7 @@ test('end records ended_by_user; the session is then ended', async (t) => {
 // route's own keys are accepted (no reasoning, frame, session_id).
 test('invalid bodies and ids are refused before the toolkit is called', async (t) => {
   const { url, calls } = await startApp(t);
-  const sid = await humanStart(url, { allow_reset: true });
+  const sid = await humanStart(url, { max_resets: 1 });
   const before = await toolkitSteps(calls);
   const bad = async (path, body, status, code) => {
     const r = await play(url, path, body);
@@ -108,6 +108,9 @@ test('invalid bodies and ids are refused before the toolkit is called', async (t
   await bad('/api/sessions', { game_id: 'bad id!' }, 400, 'INVALID_ARGUMENT');
   await bad('/api/sessions', { game_id: 'fake-maze', reasoning: 'x' }, 400, 'INVALID_ARGUMENT');
   await bad('/api/sessions', {}, 400, 'INVALID_ARGUMENT');
+  await bad('/api/sessions', { game_id: 'fake-maze', allow_reset: true }, 400, 'INVALID_ARGUMENT');
+  await bad('/api/sessions', { game_id: 'fake-maze', max_resets: -1 }, 400, 'INVALID_ARGUMENT');
+  await bad('/api/sessions', { game_id: 'fake-maze', max_resets: 1.5 }, 400, 'INVALID_ARGUMENT');
   await bad('/api/sessions/s-nope/act', { action: 'ACTION1' }, 404, 'SESSION_UNKNOWN');
   await bad('/api/sessions/s-ffffffffffff/act', { action: 'ACTION1' }, 404, 'SESSION_UNKNOWN');
   await bad('/api/sessions/s-ffffffffffff/end', {}, 404, 'SESSION_UNKNOWN');
@@ -140,12 +143,12 @@ test('guards: content type, Sec-Fetch-Site and Origin refuse before any effect',
 // (named agent, anonymous agent, legacy meta without owner.kind).
 test('HTTP play on agent sessions is refused AGENT_SESSION and changes nothing', async (t) => {
   const { url, app, mcp } = await startApp(t);
-  const named = await startGame(mcp, 'fake-maze', { allow_reset: true }, A);
-  const anon = await startGame(mcp, 'fake-maze', { allow_reset: true }, NULL);
+  const named = await startGame(mcp, 'fake-maze', { max_resets: 1 }, A);
+  const anon = await startGame(mcp, 'fake-maze', { max_resets: 1 }, NULL);
   const legacy = 's-aaaaaaaaaaaa';
   const at = '2026-01-01T00:00:00.000Z';
   await app.store.create({
-    id: legacy, game_id: 'fake-maze', title: 'Fake Maze', mode: 'local', allow_reset: true, owner: { sessionId: 'agent-old', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
+    id: legacy, game_id: 'fake-maze', title: 'Fake Maze', mode: 'local', max_resets: null, resets_used: 0, at_level_start: false, owner: { sessionId: 'agent-old', project: 'proj' }, scorecard_id: 'c', scorecard_url: null,
     status: 'live', end_reason: null, stalled: false, created_at: at, updated_at: at, last_activity_at: at, step_count: 0,
     last: { state: 'NOT_FINISHED', levels_completed: 0, win_levels: 3, available_actions: [1, 2, 3, 4], frame_count: 1, full_reset: false },
   });
@@ -165,7 +168,7 @@ test('HTTP play on agent sessions is refused AGENT_SESSION and changes nothing',
 // and it is never one of the agent's own.
 test('agents are refused HUMAN_SESSION on a human session but can observe and list it', async (t) => {
   const { url, app, mcp, mcpText } = await startApp(t);
-  const sid = await humanStart(url, { allow_reset: true });
+  const sid = await humanStart(url, { max_resets: 1 });
   const steps = app.store.get(sid).step_count;
   const calls = [['act', { session_id: sid, action: 'ACTION1' }], ['reset', { session_id: sid }], ['end_session', { session_id: sid }], ['note', { session_id: sid, note: 'n' }]];
   for (const caller of [A, NULL]) {
@@ -219,7 +222,7 @@ test('limits apply to view play: step rate, step cap, one-run reset, actions, fi
 
   const resets = (await calls()).filter((c) => c.op === 'reset').length;
   const noReset = await play(url, `/api/sessions/${sid}/reset`, {});
-  assert.deepEqual([noReset.status, noReset.body.code], [409, 'RESET_DISABLED']);
+  assert.deepEqual([noReset.status, noReset.body.code], [409, 'RESET_LIMIT']);
   assert.equal((await calls()).filter((c) => c.op === 'reset').length, resets, 'no reset reached the toolkit');
 
   const unavailable = await play(url, `/api/sessions/${sid}/act`, { action: 'ACTION5' });
