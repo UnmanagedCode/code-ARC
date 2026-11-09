@@ -27,13 +27,14 @@ The tables below give each tool's json `structured` fields; the text view of eac
 | `observe` | `session_id`, `frame` (`full` default, `none`, `image`), `image_scale`/`image_grid`, `animation` (`last` default, `all`), `animation_step` (integer, `0`–`SESSION_STEPS_MAX`, default the latest step), `animation_from` (integer ≥ 0, default 0); the last two apply to `animation:"all"` only | observation from the stored last step; no toolkit call; with `animation:"all"` also the stored animation of `animation_step` ([Animation](#animation)) |
 | `end_session` | `session_id` | `{session_id, game_id, steps, final:{state, levels_completed, win_levels, scorecard}, scorecard_url?, warnings?:[{code, detail, note}]}` |
 | `list_sessions` | `scope` (`mine` default, `all`), `offset` (integer ≥ 0, skips that many of the newest) | `{scope, total, sessions:[…]}`, newest first from `offset` on; `total` = sessions in scope; an entry always carries `allow_reset` (boolean). json lists every session in scope; text shows `LIST_SESSIONS_TEXT_PAGE` per call and says `call list_sessions with offset: <n>` for the rest |
-| `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
+| `note` | `session_id`, `note` (1–`NOTE_MAX_CHARS`, not blank after trimming) | `{session_id, run}`: opens run `k+1`; json-format steps on the session record it until the next note ([scripted-play.md](scripted-play.md)). Gating: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION` → `NOT_OWNER` → `INVALID_ARGUMENT` → `TOO_MANY_NOTES` → `STEP_RATE_LIMITED` |
 
 Text view per tool: `list_games` → a line per game; observations → the observation text below; `end_session` → final state, scorecard lines, `scorecard_url`, a `warning <code>: …` line per warning; `list_sessions` → one line per session; `note` → a line naming the run opened.
 
 - `reasoning` on `act` reaches the toolkit as `{"text": <reasoning>}`; on `reset` it is recorded for the viewer only (the toolkit's `reset()` takes none).
 - `mine` = sessions whose owner `sessionId` equals the caller's (both `null` counts as equal).
-- Ownership is a collision guard: `NOT_OWNER` only when owner and caller `sessionId` are both known and differ.
+- `owner.kind` is `agent` or `human` (a person's session, started in the view); a meta without `kind` is an agent's. A human and an agent never act on each other's sessions: an agent's `act`, `reset`, `end_session` and `note` on a human session are refused `HUMAN_SESSION`, the view's on an agent session `AGENT_SESSION`. `observe` and `list_sessions` `scope:"all"` still show human sessions (`owner.kind:"human"`); `mine` never includes them.
+- Among agents, ownership is a collision guard: `NOT_OWNER` only when owner and caller `sessionId` are both known and differ.
 - `format` also decides how a step is recorded: a json call's `act`/`reset` (and `start_session`'s `START`) is `source:"script"`, a text call's is `source:"tool"` ([scripted-play.md](scripted-play.md)).
 
 ### Observation result
@@ -108,7 +109,7 @@ An animating action returns several grids; `frame` always means the last one. `a
 
 `{error, code, details?}` in both formats: `error` is the human reason, `code` is below, and `details` is an object holding the code's extra keys (the table's last column), omitted when there are none. Envelope-level codes: `TOOL_UNKNOWN` (unknown tool), `INVALID_ARGUMENT` (malformed request, unknown `format`, schema violation), `INTERNAL` (a handler threw).
 
-Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, image options without `frame:"image"`, and animation options without `animation:"all"`, come before all of these.
+Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `HUMAN_SESSION` (view callers: `AGENT_SESSION`) → `NOT_OWNER` → `SESSION_BUSY` → `SESSION_STALLED` → toolkit state → `INVALID_ARGUMENT` → `GAME_FINISHED` → `ACTION_UNAVAILABLE` → `SESSION_STEP_LIMIT` → `STEP_RATE_LIMITED` → `RATE_LIMITED`. `reset`: the same without the action checks, plus `RESET_DISABLED` after toolkit state (before `INVALID_ARGUMENT`). Schema refusals, image options without `frame:"image"`, and animation options without `animation:"all"`, come before all of these.
 
 | Code | When | `details` keys |
 |---|---|---|
@@ -117,6 +118,8 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `SESSION_ENDED` | session ended; also `observe` with `frame:"image"` on an ended session | `end_reason` |
 | `SESSION_BUSY` | another call on the session is in flight | |
 | `SESSION_STALLED` | an earlier call timed out and hasn't answered | |
+| `HUMAN_SESSION` | an agent acted on, noted on or ended a session a person started in the view | |
+| `AGENT_SESSION` | the view's play routes on an agent's session | |
 | `NOT_OWNER` | owner and caller `sessionId` both known and different (collision guard, not auth) | |
 | `TOO_MANY_SESSIONS` | `MAX_LIVE_SESSIONS` live | `live` (ids) |
 | `GAME_UNKNOWN` | not in `list_games`, or the toolkit can't find it (with a bundle and no network, games outside the bundle are not listed: a local start of one gets a `detail` saying the web game list could not be fetched) | `detail` (bundle case only) |
@@ -137,7 +140,7 @@ Gating order for `act`: `SESSION_UNKNOWN` → `SESSION_ENDED` → `NOT_OWNER` �
 | `TOO_MANY_NOTES` | `note` past `NOTES_MAX` notes on the session (json steps still play under the last run) | |
 | `SCORECARD_CLOSED` | arcprize.org no longer knows the game/scorecard; the session ends with `scorecard_auto_closed` | `detail` |
 
-`end_reason` values: `ended_by_agent`, `scorecard_auto_closed`, `sidecar_exit`, `backend_restart`.
+`end_reason` values: `ended_by_agent`, `ended_by_user` (ended from the view), `scorecard_auto_closed`, `sidecar_exit`, `backend_restart`.
 
 ## HTTP API
 
@@ -156,19 +159,50 @@ Paths are relative to the plugin root (`/plugins/code-arc/` inside cc). Every re
 | `GET api/settings` | `{apiKey:{set, masked}}` — never the key |
 | `PUT api/settings/api-key` | body `{key}` → `{apiKey}`; 400 `INVALID_KEY` (value not echoed); 409 `SESSIONS_ACTIVE` while any session is live or starting; 409 `KEY_CHANGE_IN_PROGRESS` while another key change is being saved. Error bodies are `{error, code}`; `error` is the reason to show the user |
 | `DELETE api/settings/api-key` | clears → `{apiKey}`; the same 409s |
+| `GET api/games` | human play: `{games, web_unavailable?}` (= `list_games` json); refusals as below. Same-origin only (403 `CROSS_SITE`, the `Sec-Fetch-Site`/`Origin` rules above, without the content-type rule): it can start the sidecar and call arcprize.org |
+| `POST api/sessions` | human play: start a session ([Human play routes](#human-play-routes)) |
+| `POST api/sessions/:id/act` | human play: one action |
+| `POST api/sessions/:id/reset` | human play: reset |
+| `POST api/sessions/:id/end` | human play: end |
 | `POST api/mcp` | the MCP endpoint |
 
 Static files: an allowlist of `frontend/` files (`src/static.js`); everything else, including `/pluginBridge.js` and `/pluginTheme.css`, is a real 404.
 
+### Human play routes
+
+The view starts and plays its own sessions through the same session-service methods as the MCP tools (`src/play.js`, `src/sessions.js`), so every gate and limit applies unchanged: live cap, `STEP_RATE_MAX`, `SESSION_STEPS_MAX`, `RESET_DISABLED`, toolkit state, the ONLINE limiter, key-change blocking. The caller is `HUMAN` (`source:"human"`); only these routes produce it (`handle` in `src/mcp.js` sets `source` from `format` alone, so a `caller.source` in an MCP body is ignored). Non-GET routes need the same-origin JSON guard above.
+
+| Route | Body (other keys → 400 `INVALID_ARGUMENT`) | 200 body |
+|---|---|---|
+| `POST api/sessions` | `{game_id, online?, allow_reset?}` (bounds from the `start_session` input schema) | the observation without `ok` and `frame`, plus `title` |
+| `POST api/sessions/:id/act` | `{action, x?, y?}` (`ACTION1`–`ACTION7`; no `reasoning`, `frame` or `session_id`) | same observation body |
+| `POST api/sessions/:id/reset` | `{}` | same observation body |
+| `POST api/sessions/:id/end` | `{}` | `{session_id, game_id, steps, final, scorecard_url?, warnings?}` (= `end_session` json) |
+
+- A path id that is not a session id → 404 `SESSION_UNKNOWN`. Bad JSON → 400 `BAD_JSON`; oversize → 413.
+- A refusal is `{error, code, details?}` as in MCP, with the HTTP status from `REFUSAL_STATUS` in `src/play.js`:
+
+| Status | Codes |
+|---|---|
+| 400 | `INVALID_ARGUMENT`, `GAME_UNKNOWN` |
+| 403 | `AGENT_SESSION` |
+| 404 | `SESSION_UNKNOWN` |
+| 429 | `STEP_RATE_LIMITED`, `RATE_LIMITED` |
+| 503 | `TOOLKIT_NOT_READY`, `TOOLKIT_UNAVAILABLE`, `DEPS_DIVERGED` |
+| 502 | `TOOLKIT_ERROR`, `TOOLKIT_TIMEOUT`, `SIDECAR_EXITED`, `NETWORK_ERROR` |
+| 409 (every other code) | `SESSION_ENDED`, `SESSION_BUSY`, `SESSION_STALLED`, `GAME_FINISHED`, `ACTION_UNAVAILABLE`, `RESET_DISABLED`, `TOO_MANY_SESSIONS`, `SESSION_STEP_LIMIT`, `SCORECARD_CLOSED` |
+
+- Human steps are recorded `source:"human"`; ending records `end_reason:"ended_by_user"`. The routes act only on sessions with `owner.kind:"human"` (`AGENT_SESSION` otherwise).
+
 ### Session meta
 
-`{id, game_id, title, mode, allow_reset, owner:{sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
+`{id, game_id, title, mode, allow_reset, owner:{kind, sessionId, project}, scorecard_id, scorecard_url, status, end_reason, stalled, created_at, updated_at, last_activity_at, step_count, last:{state, levels_completed, win_levels, available_actions, frame_count, full_reset}, final?}`
 
 - `allow_reset` is missing on legacy metas: read it as `true` (`api/sessions` and SSE serve the raw meta; tool outputs always carry the resolved boolean).
 
 ### Step
 
-`{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
+`{n, ts, action:"START"|"RESET"|"ACTIONn", source:"tool"|"script"|"human", run?, x?, y?, reasoning?, state, levels_completed, win_levels, available_actions, frame_count, full_reset, frame:[hex rows]|null}`
 
 - `source` is missing on steps recorded before scripting existed: read it as `tool`. `source:"script"` = a json-format call; `run` is set only on a script step taken after a note (a script step before the first note has none).
 - Step pages and the SSE `step` event carry the last frame only, never the animation (`anim`/`anim_z`); the frames route above serves it.

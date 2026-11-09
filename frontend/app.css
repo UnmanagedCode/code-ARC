@@ -70,6 +70,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 
 .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.75rem; }
 
+.top-actions { display: flex; gap: 0.4rem; }
+
 .panel {
   background: var(--card);
   border: 1px solid var(--border);
@@ -89,7 +91,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .banner-detail { white-space: pre-wrap; word-break: break-word; margin: 0.35rem 0 0; font-size: 0.8rem; }
 .banner-fix { margin: 0.35rem 0 0; font-weight: 600; overflow-wrap: anywhere; }
 
-.settings { margin-bottom: 0.75rem; }
+.settings, .newgame { margin-bottom: 0.75rem; }
+.newgame select { display: block; max-width: 100%; margin-bottom: 0.4rem; font: inherit; color: inherit; background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) * 0.6); padding: 0.3rem 0.5rem; }
+.newgame .check { display: block; }
+.newgame-message { margin: 0.25rem 0 0; color: var(--destructive); min-height: 1em; }
 .settings label { display: block; margin-bottom: 0.25rem; }
 .key-row { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .key-row input { flex: 1 1 16rem; min-width: 0; }
@@ -126,6 +131,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .badge.status-live { border-color: var(--success); }
 .badge.status-stalled, .badge.status-warn { border-color: var(--warning); }
 .badge.status-ended { color: var(--muted-foreground); }
+.badge.owner-human { border-color: var(--primary); color: var(--primary); }
 
 .game-header { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.9rem; margin-bottom: 0.6rem; }
 .game-title { margin: 0; overflow-wrap: anywhere; }
@@ -186,7 +192,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
 .step-row:hover { background: var(--muted); }
 .step-row[aria-current="true"] { background: var(--muted); box-shadow: inset 3px 0 0 var(--primary); }
 .step-head .badge { font-family: Geist, system-ui, -apple-system, "Segoe UI", sans-serif; }
-.badge.source-script { border-color: var(--primary); color: var(--primary); }
+.badge.source-script, .badge.source-human { border-color: var(--primary); color: var(--primary); }
 .run-header {
   padding: 0.3rem 0.6rem 0.2rem;
   border-bottom: 1px solid var(--border);
@@ -201,3 +207,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--primary); o
   overflow: hidden;
 }
 .run-note { margin-bottom: 0.5rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+
+.frame-wrap.playable #grid { cursor: pointer; }
+.playbar { margin-top: 0.5rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.play-row, .play-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.play-hint, .play-message { margin: 0; min-height: 1em; }
+.play-message { color: var(--destructive); }

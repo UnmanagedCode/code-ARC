@@ -8,7 +8,7 @@ import path from 'node:path';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { createBootstrap, DIVERGED_FIX, FIX, PIP_VERSION } from '../src/bootstrap.js';
 import { bundleInstallArgs } from '../src/bundle.js';
-import { captureLog, freshEnv, json, refusal, startApp, until } from './_helpers.mjs';
+import { captureLog, freshEnv, json, refusal, sendJsonReq, startApp, until } from './_helpers.mjs';
 import { makeBundleDir, settlesWithin, TARGET } from './_bundle.mjs';
 
 const REQS = 'arc-agi==0.9.9\narcengine==0.9.3\n';
@@ -170,6 +170,11 @@ test('while installing, health answers and toolkit tools refuse TOOLKIT_NOT_READ
   const r = refusal(await mcp('list_games'), 'TOOLKIT_NOT_READY');
   assert.equal(r.details.state, 'installing');
   refusal(await mcp('start_session', { game_id: 'fake-maze' }), 'TOOLKIT_NOT_READY');
+  // The human play routes share the service's toolkit gate.
+  const games = await json(`${url}/api/games`);
+  assert.deepEqual([games.status, games.body.code], [503, 'TOOLKIT_NOT_READY']);
+  const started = await sendJsonReq(`${url}/api/sessions`, 'POST', { game_id: 'fake-maze' });
+  assert.deepEqual([started.status, started.body.code], [503, 'TOOLKIT_NOT_READY']);
   assert.equal((await json(`${url}/api/status`)).body.toolkit.state, 'installing');
 });
 
@@ -180,6 +185,8 @@ test('failed and diverged installs refuse with detail and a fix', async (t) => {
   refusal(fr, 'TOOLKIT_UNAVAILABLE');
   assert.match(fr.details.detail, /no Python/);
   assert.ok(fr.details.fix);
+  const fh = await sendJsonReq(`${a.url}/api/sessions`, 'POST', { game_id: 'fake-maze' });
+  assert.deepEqual([fh.status, fh.body.code], [503, 'TOOLKIT_UNAVAILABLE']);
 
   const div = await checkout(t);
   const shared = path.join(div.env.tmp, 'shared');
@@ -189,6 +196,8 @@ test('failed and diverged installs refuse with detail and a fix', async (t) => {
   const dr = await (async () => { for (;;) { const r = await b.mcp('list_games'); if (r.code !== 'TOOLKIT_NOT_READY') return r; await new Promise((x) => setTimeout(x, 10)); } })();
   refusal(dr, 'DEPS_DIVERGED');
   assert.match(dr.details.fix, /rm \.venv/);
+  const dh = await sendJsonReq(`${b.url}/api/sessions`, 'POST', { game_id: 'fake-maze' });
+  assert.deepEqual([dh.status, dh.body.code], [503, 'DEPS_DIVERGED']);
 });
 
 // A real detached child that never exits on its own, standing in for pip.

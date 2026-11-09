@@ -36,10 +36,11 @@ export function createStepLog(listEl, { onPick, noteOf }) {
     const h = document.createElement('span');
     h.className = 'step-head';
     h.textContent = head;
-    if (sourceOf(step) === 'script') {
+    const source = sourceOf(step);
+    if (source === 'script' || source === 'human') {
       const badge = document.createElement('span');
-      badge.className = 'badge source-script';
-      badge.textContent = 'script';
+      badge.className = `badge source-${source}`;
+      badge.textContent = source;
       h.append(' ', badge);
     }
     const t = document.createElement('span');

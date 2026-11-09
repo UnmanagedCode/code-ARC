@@ -14,14 +14,18 @@
   <header class="top">
     <h1>Code ARC</h1>
     <span id="toolkit-source" class="muted"></span>
-    <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings">Settings</button>
+    <div class="top-actions">
+      <button id="newgame-toggle" type="button" aria-expanded="false" aria-controls="newgame">New game</button>
+      <button id="settings-toggle" type="button" aria-expanded="false" aria-controls="settings">Settings</button>
+    </div>
   </header>
   <div id="toolkit-banner" class="banner" role="status" hidden></div>
+  <section id="newgame" class="newgame panel" aria-label="New game" hidden></section>
   <section id="settings" class="settings panel" aria-label="Settings" hidden></section>
   <div class="layout">
     <aside class="sessions panel" aria-labelledby="sessions-heading">
       <h2 id="sessions-heading">Sessions</h2>
-      <p id="sessions-empty" class="muted">No sessions yet. Ask an agent to play an ARC game.</p>
+      <p id="sessions-empty" class="muted">No sessions yet. Ask an agent to play an ARC game, or start one with New game.</p>
       <ul id="session-list" class="session-list"></ul>
       <button id="sessions-more" class="sessions-more" type="button" hidden>Load older sessions</button>
     </aside>
@@ -33,6 +37,7 @@
             <canvas id="grid" width="64" height="64" role="img" aria-label="Game frame"></canvas>
           </div>
           <div id="hover" class="hover muted" aria-live="off">&nbsp;</div>
+          <div id="playbar" class="playbar" aria-label="Play controls" hidden></div>
           <div class="scrubber" aria-label="Replay">
             <div class="mode-switch" role="group" aria-label="Mode">
               <button id="mode-live" type="button" aria-pressed="true">Live</button>

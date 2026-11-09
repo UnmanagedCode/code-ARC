@@ -1,4 +1,6 @@
 // The session list. Every remote- or agent-written value is set as text.
+import { isHumanSession } from './play.js';
+
 const el = (tag, cls, text) => {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
@@ -9,12 +11,14 @@ const el = (tag, cls, text) => {
 // Self-contained labels, used as-is in the list and the header.
 export const END_REASONS = {
   ended_by_agent: 'Ended by agent',
+  ended_by_user: 'Ended by user',
   scorecard_auto_closed: 'Scorecard auto-closed',
   sidecar_exit: 'Ended: toolkit exited',
   backend_restart: 'Ended: backend restarted',
 };
 
 function ownerLine(owner) {
+  if (owner?.kind === 'human') return 'You (Code ARC view)';
   if (!owner || (!owner.sessionId && !owner.project)) return 'unknown caller';
   const parts = [];
   if (owner.sessionId) parts.push(owner.sessionId.length > 12 ? `${owner.sessionId.slice(0, 12)}…` : owner.sessionId);
@@ -42,6 +46,7 @@ export function renderSessions(listEl, emptyEl, sessions, selectedId, onSelect) 
     const title = el('span', 'session-title', s.title || s.game_id);
     const badges = el('span', 'badges');
     badges.append(el('span', `badge mode-${s.mode}`, s.mode));
+    if (isHumanSession(s)) badges.append(el('span', 'badge owner-human', 'human'));
     if (s.allow_reset !== false) badges.append(el('span', 'badge resets', 'Resets'));
     const status = s.status === 'live' ? (s.stalled ? 'Stalled' : 'Live') : END_REASONS[s.end_reason] || 'Ended';
     badges.append(el('span', `badge status-${s.status === 'live' ? (s.stalled ? 'stalled' : 'live') : 'ended'}`, status));

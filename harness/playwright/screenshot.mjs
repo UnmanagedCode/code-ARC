@@ -21,6 +21,12 @@
 //   anim-single.png    the START step: no animation line
 //   anim-gap.png       a 70-frame step: only 64 stored, the not-stored note
 //   interval-slider.png the interval slider row at its minimum, showing its value
+//   human-newgame.png  the New game panel: Fake Maze picked, Allow resets ticked
+//   human-live.png     a started human session: enabled action buttons, Reset, End; the human badge
+//   human-click.png    ArrowRight then a click on cell (10,20): both steps logged as human
+//   human-replay.png   Replay: play controls disabled with the hint, a key press sends nothing
+//   human-over.png     a one-run game after GAME_OVER: actions disabled, no Reset
+//   human-refused.png  Start refused at the live-session cap, the message shown
 // Fails on any page error, CSP violation or dialog (an XSS alert).
 // Run: node harness/playwright/screenshot.mjs
 import { mkdir } from 'node:fs/promises';
@@ -28,7 +34,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BROWSER } from './resolve.mjs';
 import { bootArc, bootDiverged, bootSeeded, mcp, sessionId } from './boot.mjs';
-import { SSE_MAX_CLIENTS } from '../../src/limits.js';
+import { MAX_LIVE_SESSIONS, SSE_MAX_CLIENTS } from '../../src/limits.js';
 import { INTERVAL_MAX_MS, INTERVAL_MIN_MS, INTERVAL_STEP_MS } from '../../frontend/playback.js';
 
 const { withPage } = await import(BROWSER);
@@ -333,6 +339,90 @@ try {
   }, { viewport: { width: 1280, height: 900 } });
 } finally {
   await animSrv.close();
+}
+
+// Human play: its own server, so the other scenarios' live sessions don't count toward the cap.
+const humanSrv = await bootArc();
+try {
+  await withPage(async (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    page.on('dialog', (d) => { problems.push(`dialog: ${d.message()}`); d.dismiss(); });
+    page.on('console', (m) => { if (/Content Security Policy|Refused to/i.test(m.text()) && !/pluginBridge|pluginTheme/.test(m.text())) problems.push(`csp: ${m.text()}`); });
+    // 409 (the cap refusal) is expected below.
+    page.on('response', (r) => { if (r.status() >= 400 && r.status() !== 409 && !/pluginBridge|pluginTheme/.test(r.url())) problems.push(`${r.status()} ${new URL(r.url()).pathname}`); });
+    const logRows = () => page.locator('#steplog .step-head').allTextContents();
+    const startGame = async (game, resets) => {
+      await page.locator('#newgame-toggle').click();
+      await page.locator(`#newgame-game option[value="${game}"]`).waitFor({ state: 'attached' });
+      await page.selectOption('#newgame-game', game);
+      await page.locator('#newgame-resets').setChecked(resets);
+      return page.locator('#newgame-resets');
+    };
+    await page.goto(humanSrv.url);
+    await startGame('fake-maze', true);
+    await shot(page, 'human-newgame.png');
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await page.locator('#playbar:not([hidden])').waitFor();
+    await page.locator('#session-list .badge.owner-human').waitFor();
+    await page.locator('#steplog .step-head', { hasText: 'START' }).waitFor();
+    if (await page.locator('#playbar button[data-action="ACTION4"]').isDisabled()) problems.push('ACTION4 is disabled on a live human session');
+    if (!(await page.locator('#playbar button[data-action="RESET"]').isVisible())) problems.push('Reset is not shown on a resettable session');
+    await shot(page, 'human-live.png');
+
+    await page.keyboard.press('ArrowRight');
+    await page.locator('#steplog .step-head', { hasText: /^#1 ACTION4/ }).waitFor();
+    // A frame click needs the shown step to be the latest: wait out the pacing.
+    await page.locator('#behind').waitFor({ state: 'hidden' });
+    await page.locator('#scrub-label', { hasText: 'step 1 of 1' }).waitFor();
+    const box = await page.locator('#grid').boundingBox();
+    await page.mouse.click(box.x + (10.5 / 64) * box.width, box.y + (20.5 / 64) * box.height);
+    await page.locator('#steplog .step-head', { hasText: /^#2 ACTION6 \(10,20\)/ }).waitFor();
+    const rows = await logRows();
+    if (!/human/.test(rows[1]) || !/human/.test(rows[2])) problems.push(`human steps lack the human badge: ${JSON.stringify(rows)}`);
+    await page.locator('#scrub-label', { hasText: 'step 2 of 2' }).waitFor();
+    await page.locator('#behind').waitFor({ state: 'hidden' });
+    await page.locator('#reasoning', { hasText: '(human move)' }).waitFor();
+    await shot(page, 'human-click.png');
+
+    await page.locator('#mode-replay').click();
+    await page.locator('.play-hint', { hasText: 'Replay — switch to Live to play' }).waitFor();
+    if (!(await page.locator('#playbar button[data-action="ACTION1"]').isDisabled())) problems.push('play controls are enabled in Replay');
+    await page.keyboard.press('ArrowRight');
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(400);
+    if ((await logRows()).length !== rows.length) problems.push('a key or click sent a step in Replay');
+    await shot(page, 'human-replay.png');
+    await page.locator('#mode-live').click();
+
+    await startGame('fake-lose', false);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await page.locator('.game-title', { hasText: 'Fake Lose' }).waitFor();
+    await page.locator('#playbar button[data-action="ACTION3"]:enabled').waitFor();
+    await page.keyboard.press('ArrowLeft');
+    await page.locator('.fact', { hasText: 'State: GAME_OVER' }).waitFor();
+    for (const b of await page.locator('#playbar .play-actions button').all()) if (!(await b.isDisabled())) problems.push('an action is enabled after GAME_OVER');
+    if (await page.locator('#playbar button[data-action="RESET"]').isVisible()) problems.push('Reset is shown on a one-run session');
+    await shot(page, 'human-over.png');
+
+    // The agent's session is watch-only.
+    const agentId = sessionId(await mcp(humanSrv.url, 'start_session', { game_id: 'fake-maze' }));
+    await page.locator('#session-list li', { hasText: 'Fake Maze' }).filter({ hasNot: page.locator('.owner-human') }).first().click();
+    await page.locator('#steplog .step-head', { hasText: 'START' }).waitFor();
+    if (!(await page.locator('#playbar').isHidden())) problems.push('the play bar is shown on an agent session');
+    if (!agentId) problems.push('no agent session');
+
+    // Fill the cap with agent sessions: Start is refused with the service's message.
+    for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+      const r = await mcp(humanSrv.url, 'start_session', { game_id: 'fake-maze' });
+      if (!r.text) break;
+    }
+    await startGame('fake-maze', false);
+    await page.getByRole('button', { name: 'Start', exact: true }).click();
+    await page.locator('.newgame-message', { hasText: 'TOO_MANY_SESSIONS' }).waitFor();
+    await shot(page, 'human-refused.png');
+  }, { viewport: { width: 1280, height: 900 } });
+} finally {
+  await humanSrv.close();
 }
 
 const diverged = await bootDiverged();

@@ -66,9 +66,9 @@ test('golden path: list, start, move, ACTION6, observe, reset, end', async (t) =
 test('caller identity is stored as the owner', async (t) => {
   const { mcp, app } = await startApp(t);
   const sid = await startGame(mcp, 'fake-maze', {}, A);
-  assert.deepEqual(app.store.get(sid).owner, { sessionId: 'agent-a', project: 'proj' });
+  assert.deepEqual(app.store.get(sid).owner, { kind: 'agent', sessionId: 'agent-a', project: 'proj' });
   const anon = await startGame(mcp, 'fake-maze', {}, NULL_CALLER);
-  assert.deepEqual(app.store.get(anon).owner, { sessionId: null, project: null });
+  assert.deepEqual(app.store.get(anon).owner, { kind: 'agent', sessionId: null, project: null });
 });
 
 test('NOT_OWNER only when both owner and caller are known and differ', async (t) => {
